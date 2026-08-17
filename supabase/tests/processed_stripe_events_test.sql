@@ -16,7 +16,7 @@
 -- ============================================================================
 
 begin;
-select plan(13);
+select plan(15);
 
 -- ============================================================================
 -- anon: no access at all
@@ -122,6 +122,23 @@ select throws_ok(
   '23514',
   'new row for relation "processed_stripe_events" violates check constraint "processed_stripe_events_status_check"',
   'processed_stripe_events.status: the check constraint rejects any value outside (''processing'', ''succeeded'')'
+);
+
+-- ============================================================================
+-- claim_token column: default value + independence between rows
+-- (added by 20260817205330_add_claim_token_to_processed_stripe_events.sql)
+-- ============================================================================
+select lives_ok(
+  $$ insert into public.processed_stripe_events (stripe_event_id, event_type)
+     values ('evt_test_pgtap_claim_1', 'invoice.payment_failed'),
+            ('evt_test_pgtap_claim_2', 'invoice.payment_failed') $$,
+  'processed_stripe_events: INSERT without specifying claim_token succeeds (has a default)'
+);
+
+select isnt(
+  (select claim_token from public.processed_stripe_events where stripe_event_id = 'evt_test_pgtap_claim_1'),
+  (select claim_token from public.processed_stripe_events where stripe_event_id = 'evt_test_pgtap_claim_2'),
+  'processed_stripe_events.claim_token: default generates a distinct token per row, not a shared/fixed value'
 );
 
 select * from finish();
