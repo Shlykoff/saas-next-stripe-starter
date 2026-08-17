@@ -1,0 +1,49 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+#
+# supabase/.gitignore already covers Supabase CLI's own local state
+# (supabase/.branches, supabase/.temp); this file covers the repo root and
+# the future Next.js app.
+
+# dependencies
+node_modules
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# testing / coverage
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production build output
+/build
+/dist
+
+# secrets -- only .env.example (with placeholders) is ever committed
+.env
+.env.local
+.env*.local
+.env.production
+.env.development
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# editor / OS junk
+.DS_Store
+*.pem
+.idea
+.vscode/*
+!.vscode/extensions.json
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
