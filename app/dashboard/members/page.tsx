@@ -8,6 +8,7 @@ import { Separator } from "@/components/ui/separator";
 import { InviteMemberForm } from "@/components/invites/invite-member-form";
 import { RevokeInviteButton } from "@/components/invites/revoke-invite-button";
 import { RemoveMemberButton } from "@/components/members/remove-member-button";
+import { ChangeRoleSelect } from "@/components/members/change-role-select";
 import { RefreshOnFocus } from "@/components/refresh-on-focus";
 
 // ---------------------------------------------------------------------------
@@ -147,7 +148,18 @@ export default async function MembersPage() {
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    <Badge variant={member.role === "owner" ? "default" : "secondary"}>{member.role}</Badge>
+                    {canOwnerRemove ? (
+                      // Editable for every OTHER member when viewed by the
+                      // owner -- see ChangeRoleSelect's own doc comment for
+                      // why this is never shown next to the owner's own row.
+                      <ChangeRoleSelect
+                        memberId={member.id}
+                        currentRole={member.role}
+                        ariaLabel={`Change ${email}'s role in ${organization.name}`}
+                      />
+                    ) : (
+                      <Badge variant={member.role === "owner" ? "default" : "secondary"}>{member.role}</Badge>
+                    )}
                     {canOwnerRemove && (
                       <RemoveMemberButton
                         memberId={member.id}

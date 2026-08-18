@@ -79,6 +79,13 @@ function memberForm(memberId: string): FormData {
   return fd;
 }
 
+function roleForm(memberId: string, role: string): FormData {
+  const fd = new FormData();
+  fd.set("memberId", memberId);
+  fd.set("role", role);
+  return fd;
+}
+
 /**
  * Asserts `promise` completed via Next's redirect() -- removeMember redirects
  * to /dashboard when a user removes their OWN membership row ("leave"), same
@@ -277,6 +284,149 @@ describe("removeMember (app/actions/org.ts): the sole owner cannot remove themse
         .eq("id", ownMembershipId)
         .maybeSingle();
       expect(data).not.toBeNull(); // the DELETE was rolled back by the trigger's exception
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// changeMemberRole (app/actions/org.ts) -- same RLS policy family as
+// removeMember above ("organization_members_update_owner" this time, not
+// "..._delete_owner_or_self": there is no self-service path here at all,
+// unlike removeMember's "leave" branch -- a non-owner can never change
+// ANY row's role, including their own, per that policy's USING clause).
+// ---------------------------------------------------------------------------
+
+describe("changeMemberRole (app/actions/org.ts): non-owner cannot change roles", () => {
+  beforeEach(() => {
+    cookieJar.clear();
+  });
+
+  it("blocks a non-owner member from promoting a different member -- the role is unchanged", async () => {
+    const owner = await createTestUser("role-owner-a");
+    const memberA = await createTestUser("role-member-a");
+    const memberB = await createTestUser("role-member-b");
+    createdUserIds.push(owner.id, memberA.id, memberB.id);
+
+    const { membershipIdByUserId } = await seedOrg([
+      { id: owner.id, role: "owner" },
+      { id: memberA.id, role: "member" },
+      { id: memberB.id, role: "member" },
+    ]);
+    const targetMembershipId = membershipIdByUserId.get(memberB.id);
+    if (!targetMembershipId) throw new Error("setup: missing membership id for memberB");
+
+    await signInAs(memberA.email, TEST_PASSWORD); // a plain member, not the owner
+    const { changeMemberRole } = await import("@/app/actions/org");
+
+    const result = await changeMemberRole({ error: null }, roleForm(targetMembershipId, "owner"));
+
+    expect(result.error).not.toBeNull();
+    expect(result.error).toMatch(/not.*found|permission/i);
+
+    const { data } = await serviceClient
+      .from("organization_members")
+      .select("role")
+      .eq("id", targetMembershipId)
+      .single();
+    expect(data?.role).toBe("member"); // unchanged -- RLS silently blocked the update
+  });
+});
+
+describe("changeMemberRole (app/actions/org.ts): owner can change a member's role", () => {
+  beforeEach(() => {
+    cookieJar.clear();
+  });
+
+  it("actually updates the target member's role", async () => {
+    const owner = await createTestUser("role-owner-b");
+    const member = await createTestUser("role-member-c");
+    createdUserIds.push(owner.id, member.id);
+
+    const { membershipIdByUserId } = await seedOrg([
+      { id: owner.id, role: "owner" },
+      { id: member.id, role: "member" },
+    ]);
+    const targetMembershipId = membershipIdByUserId.get(member.id);
+    if (!targetMembershipId) throw new Error("setup: missing membership id for member");
+
+    await signInAs(owner.email, TEST_PASSWORD);
+    const { changeMemberRole } = await import("@/app/actions/org");
+
+    const result = await changeMemberRole({ error: null }, roleForm(targetMembershipId, "owner"));
+
+    expect(result.error).toBeNull();
+    expect(result.success).toBe(true);
+
+    const { data } = await serviceClient
+      .from("organization_members")
+      .select("role")
+      .eq("id", targetMembershipId)
+      .single();
+    expect(data?.role).toBe("owner");
+  });
+
+  it("submitting the role the member already has is a genuine no-op -- success, but no notification-worthy change", async () => {
+    const owner = await createTestUser("role-owner-c");
+    const member = await createTestUser("role-member-d");
+    createdUserIds.push(owner.id, member.id);
+
+    const { membershipIdByUserId } = await seedOrg([
+      { id: owner.id, role: "owner" },
+      { id: member.id, role: "member" },
+    ]);
+    const targetMembershipId = membershipIdByUserId.get(member.id);
+    if (!targetMembershipId) throw new Error("setup: missing membership id for member");
+
+    await signInAs(owner.email, TEST_PASSWORD);
+    const { changeMemberRole } = await import("@/app/actions/org");
+
+    // Submit "member" for a row that is already "member" -- this must not
+    // error (it's a legitimate no-op), and the row's role obviously stays
+    // "member" either way, so the only thing worth asserting is that the
+    // action itself reports success rather than treating "nothing to do" as
+    // a failure.
+    const result = await changeMemberRole({ error: null }, roleForm(targetMembershipId, "member"));
+
+    expect(result.error).toBeNull();
+    expect(result.success).toBe(true);
+  });
+});
+
+describe("changeMemberRole (app/actions/org.ts): the sole owner cannot be demoted", () => {
+  beforeEach(() => {
+    cookieJar.clear();
+  });
+
+  it(
+    "is rejected by trg_prevent_last_owner_change with a friendly, human-readable error -- " +
+      "not a raw Postgres exception, and the role survives",
+    async () => {
+      const soleOwner = await createTestUser("role-sole-owner");
+      createdUserIds.push(soleOwner.id);
+
+      const { membershipIdByUserId } = await seedOrg([{ id: soleOwner.id, role: "owner" }]);
+      const ownMembershipId = membershipIdByUserId.get(soleOwner.id);
+      if (!ownMembershipId) throw new Error("setup: missing membership id for soleOwner");
+
+      await signInAs(soleOwner.email, TEST_PASSWORD);
+      const { changeMemberRole } = await import("@/app/actions/org");
+
+      // Not reachable via the actual UI (the role control is never rendered
+      // next to the owner's own row -- see change-role-select.tsx's doc
+      // comment), but the Server Action itself must still refuse this
+      // safely rather than relying solely on the UI never offering it.
+      const result = await changeMemberRole({ error: null }, roleForm(ownMembershipId, "member"));
+
+      expect(result.error).not.toBeNull();
+      expect(result.error).not.toMatch(/P0001/);
+      expect(result.error).toMatch(/sole owner|last owner/i);
+
+      const { data } = await serviceClient
+        .from("organization_members")
+        .select("role")
+        .eq("id", ownMembershipId)
+        .single();
+      expect(data?.role).toBe("owner"); // the UPDATE was rolled back by the trigger's exception
     },
   );
 });

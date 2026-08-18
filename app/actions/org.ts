@@ -8,6 +8,7 @@ import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { ACTIVE_ORG_COOKIE } from "@/lib/org";
 import { resend, INVITE_EMAIL_FROM } from "@/lib/resend";
 import { renderMemberRemovedEmail } from "@/lib/emails/member-removed-email";
+import { renderRoleChangedEmail } from "@/lib/emails/role-changed-email";
 
 export interface SwitchOrganizationState {
   error: string | null;
@@ -204,6 +205,154 @@ export async function removeMember(
       // notification-only failure would read as if the removal failed,
       // which it didn't. Logged server-side so it's not silently invisible.
       console.error("Failed to send member-removed notification email:", sendError);
+    }
+  }
+
+  revalidatePath("/dashboard/members");
+  return { error: null, success: true };
+}
+
+export interface ChangeMemberRoleActionState {
+  error: string | null;
+  success?: boolean;
+}
+
+/**
+ * Server Action backing the role <Select> next to each OTHER member on
+ * app/dashboard/members/page.tsx (owner-only; there's deliberately no
+ * self-service "change my own role" control -- see the page's comment on
+ * canOwnerRemove/canLeave for the same reasoning applied here). Authorized
+ * by RLS policy "organization_members_update_owner" (supabase/migrations/
+ * 20260817171827_init_core_schema.sql: is_org_owner(organization_id)) --
+ * this action does not re-check ownership itself, same posture as
+ * removeMember/revokeInvite/deleteNote elsewhere in this app.
+ *
+ * Note this is the ONLY way to change an existing member's role in this
+ * app: re-inviting an existing member (createInvite's 23505 branch in
+ * app/actions/invites.ts) also reconciles role as a side effect of
+ * accepting a fresh invite, but that requires the invitee to click a new
+ * email link -- this is the direct, no-round-trip path for an owner who
+ * just wants to flip someone from member to owner or back.
+ *
+ * Reads the current role first (rather than blindly UPDATEing and
+ * comparing before/after) so a same-as-current submission is a genuine
+ * no-op: no UPDATE, no notification email, no revalidate -- not because an
+ * UPDATE to an unchanged value would be unsafe, but because sending "your
+ * role changed" for a change that didn't happen would be a real bug, not a
+ * cosmetic one.
+ */
+export async function changeMemberRole(
+  _prevState: ChangeMemberRoleActionState,
+  formData: FormData,
+): Promise<ChangeMemberRoleActionState> {
+  const memberId = String(formData.get("memberId") ?? "");
+  const role = String(formData.get("role") ?? "");
+
+  if (!memberId) {
+    return { error: "Missing member id." };
+  }
+  if (role !== "owner" && role !== "member") {
+    return { error: "Invalid role." };
+  }
+
+  const supabase = await createServerSupabaseClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: "You must be signed in." };
+  }
+
+  const { data: current, error: currentError } = await supabase
+    .from("organization_members")
+    .select("id, user_id, organization_id, role")
+    .eq("id", memberId)
+    .maybeSingle();
+
+  if (currentError) {
+    return { error: `Could not load member: ${currentError.message}` };
+  }
+  if (!current) {
+    // RLS-filtered to zero rows (not owner / wrong org) or a genuinely
+    // stale id -- same "not found or not allowed" phrasing as removeMember,
+    // for the same reason: PostgREST can't distinguish the two, and
+    // shouldn't reveal which one it is to a caller who might not be
+    // authorized to know the row exists at all.
+    return { error: "Member not found, or you don't have permission to change their role." };
+  }
+  if (current.role === role) {
+    return { error: null, success: true };
+  }
+
+  // `.select()` chained onto the update, same reasoning as removeMember's
+  // delete above: RLS silently filtering this UPDATE to zero matching rows
+  // (a non-owner attempting it -- policy "organization_members_update_owner"
+  // only authorizes is_org_owner(organization_id)) returns 0 rows and NO
+  // error from PostgREST. The pre-fetch above already confirmed the row
+  // exists and its role differs, so `updateError` alone can't tell a real
+  // "not allowed" apart from a real success -- checking `data` here is what
+  // actually does that (caught by this file's own test suite: without this,
+  // a non-owner's blocked update silently returned {error: null,
+  // success: true} and even sent the "your role changed" notification for a
+  // change that never happened).
+  const { data: updated, error: updateError } = await supabase
+    .from("organization_members")
+    .update({ role })
+    .eq("id", memberId)
+    .select("id")
+    .maybeSingle();
+
+  if (updateError) {
+    // trg_prevent_last_owner_change (supabase/migrations/
+    // 20260817171827_init_core_schema.sql) also fires on UPDATE when
+    // old.role='owner' and new.role<>'owner' -- demoting the organization's
+    // sole owner lands here, not as a silent success. Not actually reachable
+    // via this page's own UI today (the role control is never rendered next
+    // to the owner's own row -- see the page's canOwnerRemove/canLeave
+    // comment), but a defensive owner-of-owner scenario or a future UI
+    // change could still hit it, so it's handled rather than left to crash.
+    if (updateError.message.includes("Cannot remove the last owner")) {
+      return {
+        error:
+          "This organization's sole owner can't be demoted. Promote another member to owner first.",
+      };
+    }
+    return { error: `Could not update role: ${updateError.message}` };
+  }
+  if (!updated) {
+    // RLS silently matched zero rows -- the caller isn't the org's owner.
+    // Same phrasing as the pre-fetch's own "not found or not allowed"
+    // branch above and as removeMember's equivalent check, for the same
+    // reason: don't reveal whether the row exists to a caller who isn't
+    // authorized to know.
+    return { error: "Member not found, or you don't have permission to change their role." };
+  }
+
+  // Best-effort notify the member whose role changed -- same posture as
+  // removeMember's notification (never rolls back the change itself for a
+  // delivery failure). Unlike removeMember, this member's row still exists
+  // (only their role changed, not their membership), so the org-name lookup
+  // and the notification's own recipient both come from data already in
+  // hand -- only the email address itself needs service_role, for the same
+  // reason as removeMember: organization_members has no email column, and
+  // the anon-key session client can't read auth.users directly.
+  const serviceClient = createServiceRoleClient();
+  const [{ data: memberUser }, { data: org }] = await Promise.all([
+    serviceClient.auth.admin.getUserById(current.user_id),
+    supabase.from("organizations").select("name").eq("id", current.organization_id).single(),
+  ]);
+
+  if (memberUser.user?.email && org?.name) {
+    try {
+      await resend.emails.send({
+        from: INVITE_EMAIL_FROM,
+        to: memberUser.user.email,
+        subject: `Your role in ${org.name} changed`,
+        html: renderRoleChangedEmail({ organizationName: org.name, newRole: role }),
+      });
+    } catch (sendError) {
+      console.error("Failed to send role-changed notification email:", sendError);
     }
   }
 
