@@ -1,9 +1,14 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import "@/lib/supabase/ensure-websocket-polyfill";
 import { createClient } from "@supabase/supabase-js";
 import { validateNoteTitle, validateNoteBody, MAX_NOTE_TITLE_LENGTH } from "@/lib/note-validation";
 import type { Database } from "@/lib/supabase/database.types";
+// next/headers's cookies() is mocked once, globally, in tests/setup.ts --
+// see that file's comment for why this needs to be the SAME jar every test
+// file's application code under test reads/writes, not a private mock here.
+import { cookieJar } from "./setup";
+import { signInAs as sharedSignInAs } from "./auth-helpers";
 
 // ---------------------------------------------------------------------------
 // Part 1: validateNoteTitle / validateNoteBody are pure functions -- no
@@ -44,13 +49,13 @@ describe("validateNoteBody", () => {
 // RLS-scoped reads they rely on), which requires two things that only
 // exist inside a real Next.js request:
 //
-//   1. next/headers's cookies() -- mocked below to an in-memory Map. The
-//      SAME mock backs BOTH the "log in as X" step (which writes session
-//      cookies into the map, exactly as @supabase/ssr does for a real
-//      browser) and the action's own fresh createServerSupabaseClient()
-//      call (which reads them back out) -- so this is the real
-//      cookie-round-trip mechanism the library uses across two different
-//      requests in production, not a shortcut that bypasses it.
+//   1. next/headers's cookies() -- mocked in tests/setup.ts to an in-memory
+//      Map (`cookieJar`, imported above). The SAME mock backs BOTH the "log
+//      in as X" step (which writes session cookies into the jar, exactly as
+//      @supabase/ssr does for a real browser) and the action's own fresh
+//      createServerSupabaseClient() call (which reads them back out) -- so
+//      this is the real cookie-round-trip mechanism the library uses across
+//      two different requests in production, not a shortcut that bypasses it.
 //   2. next/cache's revalidatePath() -- throws ("static generation store
 //      missing") outside a real Next.js render; mocked to a no-op in
 //      tests/setup.ts so the actions' real success path is reachable here.
@@ -59,17 +64,6 @@ describe("validateNoteBody", () => {
 //   Acme (org 111...)   -- owner_a@example.com (owner), member_a@example.com (member)
 //   Globex (org 222...) -- owner_b@example.com (owner), no overlap with Acme
 // ---------------------------------------------------------------------------
-
-const { cookieStore } = vi.hoisted(() => ({ cookieStore: new Map<string, string>() }));
-
-vi.mock("next/headers", () => ({
-  cookies: async () => ({
-    getAll: () => [...cookieStore.entries()].map(([name, value]) => ({ name, value })),
-    set: (name: string, value: string) => {
-      cookieStore.set(name, value);
-    },
-  }),
-}));
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -89,21 +83,22 @@ const serviceClient = createClient<Database>(supabaseUrl, serviceRoleKey, {
 });
 
 const ACME_ORG_ID = "11111111-1111-1111-1111-111111111111";
+const SEED_PASSWORD = "password123";
 
 /**
- * Signs in as `email` via a real @supabase/ssr server client sharing the
- * module's mocked cookie store -- this is what populates cookieStore with a
- * valid session, so that the NEXT createServerSupabaseClient() call (made
- * internally by whichever action we invoke afterward) hydrates as that user.
+ * Signs in as one of supabase/seed.sql's fixed accounts (all sharing
+ * SEED_PASSWORD). Thin wrapper over the shared, race-safe signInAs in
+ * tests/auth-helpers.ts (see that file's doc comment for why a plain
+ * signInWithPassword() call isn't enough on its own) -- kept here so every
+ * call site below can stay `signInAs("owner_a@example.com")` rather than
+ * threading the password through each one.
  */
 async function signInAs(email: string): Promise<void> {
-  cookieStore.clear();
-  const { createServerSupabaseClient } = await import("@/lib/supabase/server");
-  const supabase = await createServerSupabaseClient();
-  const { error } = await supabase.auth.signInWithPassword({ email, password: "password123" });
-  if (error) {
+  try {
+    await sharedSignInAs(email, SEED_PASSWORD);
+  } catch (error) {
     throw new Error(
-      `Failed to sign in as ${email} (is supabase/seed.sql loaded? run \`supabase db reset\`): ${error.message}`,
+      `${error instanceof Error ? error.message : String(error)} (is supabase/seed.sql loaded? run \`supabase db reset\`)`,
     );
   }
 }
@@ -124,7 +119,7 @@ afterAll(async () => {
 
 describe("createNote (app/actions/notes.ts)", () => {
   beforeEach(() => {
-    cookieStore.clear();
+    cookieJar.clear();
   });
 
   it("rejects an empty title before ever touching the database", async () => {
@@ -219,7 +214,7 @@ describe("updateNote / deleteNote authorization (RLS: author or org owner only)"
     noteByMemberA = m.id;
     createdNoteIds.push(noteByMemberA);
 
-    cookieStore.clear();
+    cookieJar.clear();
   });
 
   it("blocks a non-author, non-owner member from updating someone else's note", async () => {

@@ -2,59 +2,16 @@
 
 import { redirect } from "next/navigation";
 import { stripe } from "@/lib/stripe";
-import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { allowedPriceIds } from "@/lib/plans";
+import { getAppUrl } from "@/lib/app-url";
+import { requireOrgOwner } from "@/lib/org";
 
-function getAppUrl(): string {
-  // NEXT_PUBLIC_APP_URL is the canonical base URL for redirect targets
-  // (Stripe requires absolute URLs for success_url/cancel_url/return_url).
-  // Falls back to localhost so `npm run dev` works without extra setup.
-  return process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-}
-
-/**
- * Verifies the current signed-in user is an OWNER of `organizationId` before
- * doing anything billing-related. Billing is an owner-only action per the
- * schema's role model (see organization_members.role check + comments in
- * supabase/migrations/20260817171827_init_core_schema.sql).
- *
- * IMPORTANT: this does not just check the shape of the client-supplied
- * organizationId -- the SELECT itself is RLS-gated (is_org_member /
- * is_org_owner), so a user who isn't actually a member of that org gets
- * zero rows back no matter what id they pass in. We never trust the client
- * to tell us who they are; we always look it up against their own session.
- */
-async function requireOrgOwner(organizationId: string) {
-  if (!organizationId) {
-    throw new Error("Missing organizationId.");
-  }
-
-  const supabase = await createServerSupabaseClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/login");
-  }
-
-  const { data: membership, error } = await supabase
-    .from("organization_members")
-    .select("role")
-    .eq("organization_id", organizationId)
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (error) {
-    throw new Error(`Failed to verify organization membership: ${error.message}`);
-  }
-
-  if (!membership || membership.role !== "owner") {
-    throw new Error("Only an organization owner can manage billing.");
-  }
-
-  return { supabase, user, organizationId };
-}
+// requireOrgOwner (billing is an owner-only action per the schema's role
+// model -- see organization_members.role check + comments in
+// supabase/migrations/20260817171827_init_core_schema.sql) and getAppUrl
+// used to be private copies in this file; both are now shared with
+// app/actions/invites.ts via lib/org.ts / lib/app-url.ts so the two files
+// can't drift out of sync on identical logic.
 
 /**
  * Server Action backing the "Subscribe" button on the pricing page.

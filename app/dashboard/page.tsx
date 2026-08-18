@@ -11,9 +11,10 @@ import {
 } from "@/lib/subscription-access";
 import { planForPriceId } from "@/lib/plans";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import { cn } from "@/lib/utils";
 
 export default async function DashboardPage({
   searchParams,
@@ -43,9 +44,14 @@ export default async function DashboardPage({
 
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 py-16">
-      <div>
-        <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <p className="text-sm text-muted-foreground">{organization.name}</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold">Dashboard</h1>
+          <p className="text-sm text-muted-foreground">{organization.name}</p>
+        </div>
+        <Link href="/dashboard/members" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+          {organization.role === "owner" ? "Manage members" : "View members"}
+        </Link>
       </div>
 
       {checkout === "success" && !hasAccess && (
