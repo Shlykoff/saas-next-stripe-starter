@@ -76,6 +76,18 @@ npm run dev
 npm run db:types   # supabase gen types typescript --local > lib/supabase/database.types.ts
 ```
 
+### Проверить что-то на проде прямо из шелла
+
+`.env.local` всегда указывает на локальный Docker Supabase — именно его читают `npm run dev`/`npm run test`, и его не стоит временно редактировать под прод-креды ради одной curl/supabase-команды. Вместо этого держите отдельный `.env.production.local` (в `.gitignore`, тот же набор переменных, реальные hosted-креды Supabase + `NEXT_PUBLIC_APP_URL=https://saas.shlykoff.com`) и подгружайте его только в текущий шелл по требованию:
+
+```bash
+source scripts/env.sh production   # только этот шелл, до его закрытия
+# ... curl/supabase-команды теперь видят реальный hosted-проект ...
+source scripts/env.sh local        # обратно на локальный Docker Supabase
+```
+
+`.env.local` и `npm run dev` этим вообще не затрагиваются — это чисто для разовой проверки (RLS на hosted-проекте, реальная доставка вебхука и т.п.), не второе окружение для разработки.
+
 ## Google OAuth
 
 Кнопка "Continue with Google" (`components/auth/google-oauth-button.tsx`) вызывает `supabase.auth.signInWithOAuth({ provider: "google" })` и была живьём проверена end-to-end с реальным Google-аккаунтом. Без настоящих Google OAuth credentials в окружении, где поднимается `supabase start`, кнопка всё равно рендерится, но упадёт на экране согласия Google (`Error 401: invalid_client`) — это ожидаемое поведение "из коробки" при первом клоне репозитория, credentials не коммитятся (`.env.local` в `.gitignore`).

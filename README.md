@@ -76,6 +76,18 @@ If you changed the DB schema (a new migration), regenerate the TS types, or `lib
 npm run db:types   # supabase gen types typescript --local > lib/supabase/database.types.ts
 ```
 
+### Checking something against production from the shell
+
+`.env.local` always points at local Docker Supabase — that's what `npm run dev`/`npm run test` read, and it should never be edited to temporarily hold production credentials just to run one `curl`/`supabase` command against the hosted project. Instead, keep a separate `.env.production.local` (gitignored, same variable set, real hosted Supabase URL/keys + `NEXT_PUBLIC_APP_URL=https://saas.shlykoff.com`) and load it into just the current shell on demand:
+
+```bash
+source scripts/env.sh production   # this shell only, until you close it
+# ... curl/supabase commands now see the real hosted project ...
+source scripts/env.sh local        # back to local Docker Supabase
+```
+
+Neither `.env.local` nor `npm run dev` are ever touched by this — it's purely for one-off verification (checking RLS on the hosted project, inspecting a real webhook delivery, etc.), not a second app environment to develop against.
+
 ## Google OAuth
 
 The "Continue with Google" button (`components/auth/google-oauth-button.tsx`) calls `supabase.auth.signInWithOAuth({ provider: "google" })` and has been verified live end-to-end with a real Google account. Without real Google OAuth credentials in the environment where `supabase start` runs, the button still renders, but fails on Google's consent screen (`Error 401: invalid_client`) — expected out-of-the-box behavior on a fresh clone, since credentials aren't committed (`.env.local` is in `.gitignore`).
