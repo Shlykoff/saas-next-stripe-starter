@@ -7,12 +7,20 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { InviteMemberForm } from "@/components/invites/invite-member-form";
 import { RevokeInviteButton } from "@/components/invites/revoke-invite-button";
+import { RemoveMemberButton } from "@/components/members/remove-member-button";
 import { RefreshOnFocus } from "@/components/refresh-on-focus";
 
 // ---------------------------------------------------------------------------
 // Members & invites. Two independent lists:
-//   - roster (organization_members): visible to every member, read-only for
-//     everyone (no role management UI yet -- out of scope for this pass).
+//   - roster (organization_members): visible to every member. Owners can
+//     remove any OTHER member (never themselves from here -- see the
+//     `isOwner` branch below); a non-owner can remove only themselves
+//     ("Leave organization"). Both are the same removeMember Server Action
+//     (app/actions/org.ts), authorized entirely by RLS policy
+//     "organization_members_delete_owner_or_self" (supabase/migrations/
+//     20260817171827_init_core_schema.sql: is_org_owner(organization_id) OR
+//     user_id = auth.uid()) -- no role management UI yet beyond that, out
+//     of scope for this pass.
 //   - pending invites (organization_invites): visible AND manageable
 //     (create/revoke) by the organization owner only, per RLS policies
 //     "organization_invites_select_owner" / "..._insert_owner" /
@@ -41,7 +49,7 @@ export default async function MembersPage() {
 
   const { data: members, error: membersError } = await supabase
     .from("organization_members")
-    .select("user_id, role, created_at")
+    .select("id, user_id, role, created_at")
     .eq("organization_id", organization.id)
     .order("created_at", { ascending: true });
 
@@ -110,24 +118,57 @@ export default async function MembersPage() {
           <CardDescription>Everyone currently in this workspace.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
-          {(members ?? []).map((member, index) => (
-            <div key={member.user_id}>
-              {index > 0 && <Separator className="mb-3" />}
-              <div className="flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">
-                    {emailByUserId.get(member.user_id) ?? "Unknown user"}
-                    {member.user_id === user.id && (
-                      <span className="ml-1.5 text-xs font-normal text-muted-foreground">(you)</span>
+          {(members ?? []).map((member, index) => {
+            const email = emailByUserId.get(member.user_id) ?? "Unknown user";
+            const isSelf = member.user_id === user.id;
+            // Owner removing a teammate: shown for every OTHER member, never
+            // for the owner's own row -- removing yourself while owner is a
+            // separate, riskier flow (it can hit trg_prevent_last_owner_change
+            // if you're the sole owner) that this page deliberately doesn't
+            // surface a button for, to avoid conflating "manage the team"
+            // with "leave and possibly strand the organization". The server
+            // action would still refuse it safely either way (see
+            // app/actions/org.ts's removeMember), this is purely about not
+            // inviting the click.
+            const canOwnerRemove = isOwner && !isSelf;
+            // Non-owner leaving voluntarily: RLS allows removing your own
+            // membership row regardless of role, so this is offered to any
+            // non-owner viewing their own row.
+            const canLeave = !isOwner && isSelf;
+
+            return (
+              <div key={member.user_id}>
+                {index > 0 && <Separator className="mb-3" />}
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">
+                      {email}
+                      {isSelf && <span className="ml-1.5 text-xs font-normal text-muted-foreground">(you)</span>}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Badge variant={member.role === "owner" ? "default" : "secondary"}>{member.role}</Badge>
+                    {canOwnerRemove && (
+                      <RemoveMemberButton
+                        memberId={member.id}
+                        variant="remove"
+                        ariaLabel={`Remove ${email} from ${organization.name}`}
+                        confirmMessage={`Remove ${email} from ${organization.name}? They'll immediately lose access.`}
+                      />
                     )}
-                  </p>
+                    {canLeave && (
+                      <RemoveMemberButton
+                        memberId={member.id}
+                        variant="leave"
+                        ariaLabel={`Leave ${organization.name}`}
+                        confirmMessage={`Leave ${organization.name}? You'll immediately lose access to its notes and billing.`}
+                      />
+                    )}
+                  </div>
                 </div>
-                <Badge variant={member.role === "owner" ? "default" : "secondary"} className="shrink-0">
-                  {member.role}
-                </Badge>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </CardContent>
       </Card>
 
