@@ -27,6 +27,10 @@ cp .env.example .env.local
 npm run dev
 ```
 
+**Пока идёт локальная разработка, держите `stripe listen --forward-to localhost:3000/api/webhooks/stripe` запущенным в отдельном терминале постоянно** (не только на время одного теста) — без него Stripe физически не может доставить вебхук на `localhost`, и `checkout.session.completed`/`customer.subscription.*` события просто теряются: Checkout пройдёт успешно, но `/dashboard` так и останется на "No active subscription", как будто оплата не сработала. Если забыли и уже потеряли событие — не нужно повторять Checkout, событие уже есть в Stripe: `stripe events list --limit 5` найдёт его `evt_...`, `stripe events resend <event_id> --confirm` доставит повторно, как только `stripe listen` снова поднят.
+
+> Известное ограничение окружения: если `npm run dev` падает в цикл `Watchpack Error (watcher): EMFILE: too many open files`, это лимит файловых дескрипторов конкретной песочницы/машины, не баг проекта — `npm run build && npm run start` (без persistent watcher) не подвержен этой проблеме и подходит для сквозной проверки флоу.
+
 Пройти весь флоу вручную:
 
 1. Открыть `http://localhost:3000`, нажать "Get started" → `/signup`, зарегистрироваться email+паролем (локально email-подтверждение выключено — сессия создаётся сразу).
