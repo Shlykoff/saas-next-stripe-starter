@@ -46,12 +46,21 @@ jobs:
       # values for the local dev stack (not secrets; the same values appear
       # in every `supabase start` on every machine), so they're safe to
       # write straight into $GITHUB_ENV.
+      #
+      # IMPORTANT: `-o env` wraps every value in double quotes
+      # (KEY="value"), which is correct shell syntax but NOT what
+      # $GITHUB_ENV expects -- GITHUB_ENV is a dumb KEY=VALUE line parser
+      # with no quote-stripping, so appending the quoted form directly
+      # makes every value include literal `"` characters (breaking, e.g.,
+      # supabase-js's URL validation on NEXT_PUBLIC_SUPABASE_URL). The sed
+      # strips those quotes before appending.
       - name: Export local Supabase env vars
         run: |
           supabase status -o env \
             --override-name api.url=NEXT_PUBLIC_SUPABASE_URL \
             --override-name auth.anon_key=NEXT_PUBLIC_SUPABASE_ANON_KEY \
             --override-name auth.service_role_key=SUPABASE_SERVICE_ROLE_KEY \
+            | sed 's/="\(.*\)"$/=\1/' \
             >> "$GITHUB_ENV"
 
       - name: Lint
