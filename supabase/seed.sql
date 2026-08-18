@@ -102,4 +102,21 @@ begin
   -- Globex: never checked out -> no subscription row at all, status is
   -- effectively "no subscription" from the app's point of view. This also
   -- exercises the "org exists with zero subscription rows" edge case.
+
+  -- --------------------------------------------------------------------------
+  -- Pending organization invite (Acme invites a not-yet-registered address)
+  -- --------------------------------------------------------------------------
+  -- Manual check: as owner_a@example.com, this should be visible/revokable;
+  -- as member_a@example.com or owner_b@example.com, it should not show up at
+  -- all (organization_invites_select_owner is owner-only, not member-visible
+  -- like the roster). The token below is only for local manual testing of
+  -- the invite-link shape (/invite/accept?token=...) -- it is NOT a secret
+  -- worth protecting, this is throwaway local seed data.
+  insert into public.organization_invites (
+    id, organization_id, email, role, invited_by, token, status
+  ) values (
+    'dddddddd-dddd-dddd-dddd-dddddddddddd', org_a_id, 'newhire@example.com', 'member',
+    owner_a_id, 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', 'pending'
+  )
+  on conflict (id) do nothing;
 end $$;
