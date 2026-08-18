@@ -101,9 +101,9 @@ export default async function PricingPage({
                     Sign in to subscribe
                   </Link>
                 ) : !organization ? (
-                  <Button className="w-full" disabled>
+                  <Link href="/onboarding" className={cn(buttonVariants(), "w-full")}>
                     Create a workspace first
-                  </Button>
+                  </Link>
                 ) : organization.role !== "owner" ? (
                   <Button className="w-full" disabled>
                     Owner only

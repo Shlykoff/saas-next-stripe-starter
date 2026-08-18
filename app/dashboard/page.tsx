@@ -48,7 +48,7 @@ export default async function DashboardPage({
         <p className="text-sm text-muted-foreground">{organization.name}</p>
       </div>
 
-      {checkout === "success" && (
+      {checkout === "success" && !hasAccess && (
         <Alert>
           <AlertTitle>Checkout complete</AlertTitle>
           <AlertDescription>
