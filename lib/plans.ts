@@ -37,3 +37,9 @@ export function resolvePlanPriceId(plan: Plan): string | null {
 export function allowedPriceIds(): string[] {
   return PLANS.map(resolvePlanPriceId).filter((id): id is string => Boolean(id));
 }
+
+/** Reverse lookup: which configured plan (if any) a subscription's Stripe price id belongs to. */
+export function planForPriceId(priceId: string | null | undefined): Plan | null {
+  if (!priceId) return null;
+  return PLANS.find((plan) => resolvePlanPriceId(plan) === priceId) ?? null;
+}

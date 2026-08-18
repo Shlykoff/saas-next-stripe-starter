@@ -139,9 +139,18 @@ export async function createPortalSession(formData: FormData) {
 
   const appUrl = getAppUrl();
 
+  // Without an explicit configuration, Stripe falls back to the account's
+  // default portal configuration, which -- freshly created -- has plan
+  // switching disabled (customers can only cancel / update payment method).
+  // STRIPE_PORTAL_CONFIGURATION_ID points at a configuration with
+  // subscription_update enabled for both plans in lib/plans.ts (see
+  // .env.example for how to create one).
+  const configurationId = process.env.STRIPE_PORTAL_CONFIGURATION_ID;
+
   const portalSession = await stripe.billingPortal.sessions.create({
     customer: subscription.stripe_customer_id,
     return_url: `${appUrl}/dashboard`,
+    ...(configurationId ? { configuration: configurationId } : {}),
   });
 
   redirect(portalSession.url);

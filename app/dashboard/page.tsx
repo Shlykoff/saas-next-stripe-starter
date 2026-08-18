@@ -9,6 +9,7 @@ import {
   subscriptionStatusBadgeVariant,
   subscriptionStatusLabel,
 } from "@/lib/subscription-access";
+import { planForPriceId } from "@/lib/plans";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -38,6 +39,7 @@ export default async function DashboardPage({
 
   const subscription = await getOrganizationSubscription(supabase, organization.id);
   const hasAccess = hasActiveSubscriptionAccess(subscription?.status);
+  const plan = planForPriceId(subscription?.stripe_price_id);
 
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 py-16">
@@ -76,7 +78,9 @@ export default async function DashboardPage({
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
-            <CardTitle className="text-base">Subscription</CardTitle>
+            <CardTitle className="text-base">
+              {plan ? `${plan.name} plan` : "Subscription"}
+            </CardTitle>
             <Badge variant={subscriptionStatusBadgeVariant(subscription?.status)}>
               {subscriptionStatusLabel(subscription?.status)}
             </Badge>
