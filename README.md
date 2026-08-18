@@ -206,4 +206,4 @@ curl https://api.stripe.com/v1/billing_portal/configurations \
 
 ## What's next
 
-- **Notes**: paginated, searchable, sortable, and live-updating across members (see the Notes bullet above); still no attachments. Enough to demonstrate paywall gating plus a realistic list UX; a real product would need a separate iteration for attachments.
+- **Notes attachments** — file uploads on notes. Everything else (pagination, search, sort, live updates — see the Notes bullet above) already shipped; attachments were scoped out as a separate, larger feature (storage, upload UX, RLS on files) rather than folded into that round.
