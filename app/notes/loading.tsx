@@ -17,6 +17,10 @@ export default function NotesLoading() {
           <Skeleton className="h-16 w-full" />
         </CardContent>
       </Card>
+      <div className="flex flex-col gap-3 sm:flex-row sm:justify-between">
+        <Skeleton className="h-9 w-full sm:max-w-xs" />
+        <Skeleton className="h-9 w-44" />
+      </div>
       <div className="flex flex-col gap-3">
         {[0, 1].map((i) => (
           <Card key={i}>

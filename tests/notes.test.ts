@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import "@/lib/supabase/ensure-websocket-polyfill";
 import { createClient } from "@supabase/supabase-js";
@@ -151,7 +151,7 @@ describe("createNote (app/actions/notes.ts)", () => {
     expect(result.success).toBe(true);
 
     const supabase = await createServerSupabaseClient();
-    const notes = await getOrganizationNotes(supabase, ACME_ORG_ID);
+    const { notes } = await getOrganizationNotes(supabase, ACME_ORG_ID, { pageSize: 100 });
     const created = notes.find((n) => n.title === title);
     expect(created).toBeDefined();
     if (created) createdNoteIds.push(created.id);
@@ -294,5 +294,202 @@ describe("updateNote / deleteNote authorization (RLS: author or org owner only)"
     const { data } = await serviceClient.from("notes").select("id").eq("id", noteByMemberA).maybeSingle();
     expect(data).toBeNull(); // actually gone
     createdNoteIds.splice(createdNoteIds.indexOf(noteByMemberA), 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Part 3: getOrganizationNotes (lib/notes.ts) pagination/search/sort --
+// the query app/notes/page.tsx now drives from ?page=/?q=/?sort=. Uses a
+// dedicated throwaway org + owner (not the shared Acme fixture) so the
+// exact note COUNT this section asserts on can't drift depending on
+// whatever Part 1/2 above happened to leave lying around at the moment this
+// runs, and so it can insert enough notes to actually exercise a second
+// page without perturbing those other describe blocks' own assumptions
+// about Acme's note count.
+// ---------------------------------------------------------------------------
+describe("getOrganizationNotes (lib/notes.ts): pagination, search, sort", () => {
+  const TEST_PASSWORD = "password123";
+  let ownerId: string;
+  let ownerEmail: string;
+  let orgId: string;
+  const noteIds: string[] = [];
+
+  // 25 notes, explicit (spaced) created_at so "newest"/"oldest" ordering is
+  // deterministic regardless of how fast these inserts actually land --
+  // titles chosen so a substring search ("Sprint") matches a known subset
+  // and title-ascending sort has an unambiguous expected order.
+  const NOTE_COUNT = 25;
+  const SEARCH_MATCH_COUNT = 5; // "Sprint 00".."Sprint 04"
+
+  beforeAll(async () => {
+    const email = `notes-paging-${randomUUID()}@example.com`;
+    const { data: user, error: userError } = await serviceClient.auth.admin.createUser({
+      email,
+      password: TEST_PASSWORD,
+      email_confirm: true,
+    });
+    if (userError || !user.user) throw userError ?? new Error("failed to create paging test user");
+    ownerId = user.user.id;
+    ownerEmail = email;
+
+    const { data: org, error: orgError } = await serviceClient
+      .from("organizations")
+      .insert({ name: "Paging Test Org", slug: `paging-test-${randomUUID()}` })
+      .select("id")
+      .single();
+    if (orgError || !org) throw orgError ?? new Error("failed to create paging test org");
+    orgId = org.id;
+
+    const { error: memberError } = await serviceClient
+      .from("organization_members")
+      .insert({ organization_id: orgId, user_id: ownerId, role: "owner" });
+    if (memberError) throw memberError;
+
+    const baseTime = Date.UTC(2026, 0, 1, 0, 0, 0);
+    const rows = Array.from({ length: NOTE_COUNT }, (_, i) => ({
+      organization_id: orgId,
+      author_id: ownerId,
+      // First 5 titles are findable by the "Sprint" search below; the rest
+      // are alphabetically distinct ("Zzz 05".."Zzz 24") so title_asc has a
+      // single unambiguous expected order together with the Sprint notes.
+      title: i < SEARCH_MATCH_COUNT ? `Sprint 0${i} planning` : `Zzz note ${String(i).padStart(2, "0")}`,
+      body: i < SEARCH_MATCH_COUNT ? "agenda: sprint review" : "",
+      // Spaced 1 minute apart, strictly increasing with i -- note 0 is
+      // oldest, note 24 is newest.
+      created_at: new Date(baseTime + i * 60_000).toISOString(),
+    }));
+
+    const { data: inserted, error: insertError } = await serviceClient.from("notes").insert(rows).select("id");
+    if (insertError || !inserted) throw insertError ?? new Error("failed to seed paging test notes");
+    noteIds.push(...inserted.map((r) => r.id));
+  });
+
+  afterAll(async () => {
+    // FK order matters: notes.author_id -> auth.users has no ON DELETE
+    // action (RESTRICT, see supabase/migrations/20260817212642_add_notes.sql),
+    // so the notes must go before the user; the organization is deleted
+    // before the user too, cascading organization_members.
+    if (noteIds.length > 0) {
+      await serviceClient.from("notes").delete().in("id", noteIds);
+    }
+    if (orgId) {
+      await serviceClient.from("organizations").delete().eq("id", orgId);
+    }
+    if (ownerId) {
+      await serviceClient.auth.admin.deleteUser(ownerId);
+    }
+  });
+
+  beforeEach(async () => {
+    cookieJar.clear();
+    await sharedSignInAs(ownerEmail, TEST_PASSWORD);
+  });
+
+  it("defaults to newest-first, page 1, 20 per page, with correct totals", async () => {
+    const { createServerSupabaseClient } = await import("@/lib/supabase/server");
+    const { getOrganizationNotes } = await import("@/lib/notes");
+    const supabase = await createServerSupabaseClient();
+
+    const result = await getOrganizationNotes(supabase, orgId);
+
+    expect(result.page).toBe(1);
+    expect(result.pageSize).toBe(20);
+    expect(result.totalCount).toBe(NOTE_COUNT);
+    expect(result.totalPages).toBe(2);
+    expect(result.notes).toHaveLength(20);
+    // Newest first: note 24 (last inserted, latest created_at) leads.
+    expect(result.notes[0].title).toBe("Zzz note 24");
+  });
+
+  it("returns the remaining notes on page 2", async () => {
+    const { createServerSupabaseClient } = await import("@/lib/supabase/server");
+    const { getOrganizationNotes } = await import("@/lib/notes");
+    const supabase = await createServerSupabaseClient();
+
+    const result = await getOrganizationNotes(supabase, orgId, { page: 2 });
+
+    expect(result.page).toBe(2);
+    expect(result.notes).toHaveLength(NOTE_COUNT - 20);
+    // Oldest 5 notes (Sprint 00..04) land on page 2 under newest-first sort.
+    expect(result.notes.every((n) => n.title.startsWith("Sprint"))).toBe(true);
+  });
+
+  it("sorts oldest-first when requested", async () => {
+    const { createServerSupabaseClient } = await import("@/lib/supabase/server");
+    const { getOrganizationNotes } = await import("@/lib/notes");
+    const supabase = await createServerSupabaseClient();
+
+    const result = await getOrganizationNotes(supabase, orgId, { sort: "oldest", pageSize: NOTE_COUNT });
+
+    expect(result.notes[0].title).toBe("Sprint 00 planning");
+    expect(result.notes[result.notes.length - 1].title).toBe("Zzz note 24");
+  });
+
+  it("sorts title A-Z when requested", async () => {
+    const { createServerSupabaseClient } = await import("@/lib/supabase/server");
+    const { getOrganizationNotes } = await import("@/lib/notes");
+    const supabase = await createServerSupabaseClient();
+
+    const result = await getOrganizationNotes(supabase, orgId, { sort: "title_asc", pageSize: NOTE_COUNT });
+
+    const titles = result.notes.map((n) => n.title);
+    const sorted = [...titles].sort((a, b) => a.localeCompare(b));
+    expect(titles).toEqual(sorted);
+    expect(titles[0]).toMatch(/^Sprint/); // "Sprint..." sorts before "Zzz..."
+  });
+
+  it("filters by search term across title and body, case-insensitively", async () => {
+    const { createServerSupabaseClient } = await import("@/lib/supabase/server");
+    const { getOrganizationNotes } = await import("@/lib/notes");
+    const supabase = await createServerSupabaseClient();
+
+    const result = await getOrganizationNotes(supabase, orgId, { search: "sprint" });
+
+    expect(result.totalCount).toBe(SEARCH_MATCH_COUNT);
+    expect(result.notes).toHaveLength(SEARCH_MATCH_COUNT);
+    expect(result.notes.every((n) => n.title.startsWith("Sprint"))).toBe(true);
+  });
+
+  it("returns an empty page (not an error) for a search term matching nothing", async () => {
+    const { createServerSupabaseClient } = await import("@/lib/supabase/server");
+    const { getOrganizationNotes } = await import("@/lib/notes");
+    const supabase = await createServerSupabaseClient();
+
+    const result = await getOrganizationNotes(supabase, orgId, { search: "no such note anywhere" });
+
+    expect(result.totalCount).toBe(0);
+    expect(result.notes).toEqual([]);
+  });
+
+  it(
+    "a search term containing filter-syntax-reserved characters (comma, parens) doesn't corrupt the " +
+      "query or leak other notes -- it's escaped, not interpreted as PostgREST .or() syntax",
+    async () => {
+      const { createServerSupabaseClient } = await import("@/lib/supabase/server");
+      const { getOrganizationNotes } = await import("@/lib/notes");
+      const supabase = await createServerSupabaseClient();
+
+      const result = await getOrganizationNotes(supabase, orgId, { search: "sprint, planning (weekly)" });
+
+      // Matches nothing (no note contains that exact literal substring),
+      // but critically must not throw / return unrelated rows / return
+      // every row -- all of which is what a broken (unescaped) filter
+      // string could do instead.
+      expect(result.totalCount).toBe(0);
+      expect(result.notes).toEqual([]);
+    },
+  );
+
+  it("is scoped by organization RLS the same as the unpaginated read -- a non-member gets nothing", async () => {
+    cookieJar.clear();
+    await sharedSignInAs("owner_b@example.com", "password123"); // Globex, not a member of this throwaway org
+    const { createServerSupabaseClient } = await import("@/lib/supabase/server");
+    const { getOrganizationNotes } = await import("@/lib/notes");
+    const supabase = await createServerSupabaseClient();
+
+    const result = await getOrganizationNotes(supabase, orgId);
+
+    expect(result.totalCount).toBe(0);
+    expect(result.notes).toEqual([]);
   });
 });
