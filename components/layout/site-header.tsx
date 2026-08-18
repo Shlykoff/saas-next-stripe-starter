@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { signOut } from "@/app/actions/auth";
 import { OrgSwitcher } from "@/components/layout/org-switcher";
+import { MobileNav } from "@/components/layout/mobile-nav";
 import type { ActiveOrganization } from "@/lib/org";
 
 // Note: this Button is base-ui-based (@base-ui/react/button), which is
@@ -37,7 +38,13 @@ export function SiteHeader({
           )}
         </div>
 
-        <nav className="flex items-center gap-1 sm:gap-2" aria-label="Main">
+        {/*
+          Horizontal nav: md (768px) and up only. Below that, this many
+          items (up to 4 links + org switcher + an auth button) overlaps
+          rather than fitting on one row -- see MobileNav for the
+          hamburger/Sheet shown instead at narrower widths.
+        */}
+        <nav className="hidden items-center gap-1 md:flex md:gap-2" aria-label="Main">
           <Button variant="ghost" size="sm" render={<Link href="/pricing" />}>
             Pricing
           </Button>
@@ -70,6 +77,11 @@ export function SiteHeader({
             </>
           )}
         </nav>
+
+        {/* Below md: same links + auth action, collapsed into a Sheet. */}
+        <div className="md:hidden">
+          <MobileNav isSignedIn={isSignedIn} />
+        </div>
       </div>
     </header>
   );

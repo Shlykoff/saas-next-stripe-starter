@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { InviteMemberForm } from "@/components/invites/invite-member-form";
 import { RevokeInviteButton } from "@/components/invites/revoke-invite-button";
+import { RefreshOnFocus } from "@/components/refresh-on-focus";
 
 // ---------------------------------------------------------------------------
 // Members & invites. Two independent lists:
@@ -89,6 +90,15 @@ export default async function MembersPage() {
 
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-6 py-16">
+      {/*
+        Pending invites can be accepted from a different tab/browser/session
+        than the one an owner is looking at this page in (see
+        components/refresh-on-focus.tsx). Without this, an owner who left
+        this tab open sees a stale "pending" invite until they reload by
+        hand.
+      */}
+      <RefreshOnFocus />
+
       <div>
         <h1 className="text-2xl font-semibold">Members</h1>
         <p className="text-sm text-muted-foreground">{organization.name}</p>
