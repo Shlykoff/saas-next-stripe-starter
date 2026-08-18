@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same branch/PR instead of queueing them.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Spins up the same local Postgres/Auth/PostgREST stack used in local
+      # dev (see CLAUDE.md) inside the runner via Docker -- migrations, RLS
+      # policies, and pgTAP tests are exercised against a real Postgres, not
+      # mocked. No Supabase account/token needed: this is entirely local to
+      # the runner and torn down when the job ends.
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start local Supabase and apply migrations + seed
+        run: supabase start
+
+      - name: Run pgTAP tests (RLS isolation, idempotency, notes)
+        run: supabase test db
+
+      # supabase status's default env-var names (ANON_KEY, API_URL,
+      # SERVICE_ROLE_KEY) don't match what this app's code actually reads
+      # (NEXT_PUBLIC_SUPABASE_URL etc, see lib/supabase/server.ts) --
+      # --override-name remaps them. These are fixed, publicly-documented
+      # values for the local dev stack (not secrets; the same values appear
+      # in every `supabase start` on every machine), so they're safe to
+      # write straight into $GITHUB_ENV.
+      - name: Export local Supabase env vars
+        run: |
+          supabase status -o env \
+            --override-name api.url=NEXT_PUBLIC_SUPABASE_URL \
+            --override-name auth.anon_key=NEXT_PUBLIC_SUPABASE_ANON_KEY \
+            --override-name auth.service_role_key=SUPABASE_SERVICE_ROLE_KEY \
+            >> "$GITHUB_ENV"
+
+      - name: Lint
+        run: npm run lint
+
+      # No real Stripe account needed: tests/webhooks-stripe.test.ts uses
+      # stripe.webhooks.generateTestHeaderString (pure local HMAC signing,
+      # see README "Автоматизированный тест вебхука") and never calls the
+      # live Stripe API, so these values just need to be non-empty strings
+      # for lib/stripe.ts's Stripe client constructor and the webhook
+      # signature check to have something to work with.
+      - name: Run tests
+        run: npm run test
+        env:
+          STRIPE_SECRET_KEY: sk_test_ci_placeholder
+          STRIPE_WEBHOOK_SECRET: whsec_ci_placeholder
+          STRIPE_PRICE_ID_BASIC: price_ci_placeholder_basic
+          STRIPE_PRICE_ID_PRO: price_ci_placeholder_pro
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
+
+      - name: Build
+        run: npm run build
+        env:
+          STRIPE_SECRET_KEY: sk_test_ci_placeholder
+          STRIPE_WEBHOOK_SECRET: whsec_ci_placeholder
+          STRIPE_PRICE_ID_BASIC: price_ci_placeholder_basic
+          STRIPE_PRICE_ID_PRO: price_ci_placeholder_pro
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
