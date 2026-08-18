@@ -1,8 +1,14 @@
 # SaaS Starter
 
+[![CI](https://github.com/Shlykoff/saas-next-stripe-starter/actions/workflows/ci.yml/badge.svg)](https://github.com/Shlykoff/saas-next-stripe-starter/actions/workflows/ci.yml)
+
+**Живое демо:** https://saas.shlykoff.com — тестовые доступы и карты см. в разделах ниже ("Запуск локально" для сид-аккаунтов, "Тестовые карты" для Stripe).
+
 SaaS-стартер с подпиской: Next.js (App Router) + Supabase (Auth/Postgres/RLS) + Stripe (Checkout, Customer Portal, Webhooks). Полное ТЗ — `docs/spec.md`, контекст для агентов — `CLAUDE.md`.
 
-> Статус: MVP-флоу собран целиком и вручную пройден в браузере от начала до конца — регистрация с обязательным подтверждением email, вход через Google OAuth, онбординг (создание workspace), тарифы → Stripe Checkout, апгрейд плана Basic→Pro прямо в Stripe Customer Portal с немедленным списанием разницы, личный кабинет со статусом/названием подписки, продуктовая фича `/notes` (реальный CRUD с organization-scoped RLS) гейтится по статусу подписки. Скриншоты/демо-ссылка появятся при деплое на Vercel.
+> Статус: MVP-флоу собран целиком, задеплоен на прод (Vercel + hosted Supabase + Stripe test mode + Resend) и вручную пройден в браузере от начала до конца — регистрация с обязательным подтверждением email (реальная доставка через Resend), вход через Google OAuth, онбординг (создание workspace), тарифы → Stripe Checkout, апгрейд плана Basic→Pro прямо в Stripe Customer Portal с немедленным списанием разницы, личный кабинет со статусом/названием подписки, продуктовая фича `/notes` (реальный CRUD с organization-scoped RLS) гейтится по статусу подписки.
+
+<!-- TODO: скриншоты/GIF основных экранов (pricing, dashboard, notes paywall) -->
 
 ## Стек
 
@@ -174,5 +180,6 @@ curl https://api.stripe.com/v1/billing_portal/configurations \
 
 ## Что дальше
 
+- **Скриншоты/GIF** основных экранов (pricing, dashboard, notes paywall) — прод уже живой (`https://saas.shlykoff.com`), осталось только снять.
 - **Org switcher**: сейчас у пользователя предполагается ровно одна организация (`lib/org.ts`'s `getActiveOrganization` берёт первую по `created_at`); инвайт-флоу и мульти-org UI не входили в этот этап.
 - **Notes**: сейчас общие для всей организации, плоский список без пагинации/поиска/сортировки, без вложений и real-time обновлений между участниками (нужно обновить страницу, чтобы увидеть чужие правки). Хватает для демонстрации paywall-гейтинга; для реального продукта — отдельная итерация.
