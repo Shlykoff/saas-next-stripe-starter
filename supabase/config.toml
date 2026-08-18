@@ -160,17 +160,23 @@ site_url = "http://127.0.0.1:3000"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-# Must include the app's actual OAuth callback route (app/auth/callback/route.ts), not just the
-# bare origin -- site_url alone only covers exact-match redirects to "/", so without this,
-# signInWithOAuth's redirectTo of "<origin>/auth/callback?next=..." doesn't match any allowed
-# entry and GoTrue silently falls back to site_url, dropping the auth code on "/" where nothing
-# ever exchanges it for a session. Both hostnames are listed since a developer may browse via
-# either "localhost" or "127.0.0.1", and wildcard forms are included in case this GoTrue version
-# treats the list as glob patterns despite the "exact URLs" wording above.
+# Must include the app's actual OAuth/email-confirmation callback routes
+# (app/auth/callback/route.ts, app/auth/confirm/route.ts), not just the bare
+# origin -- site_url alone only covers exact-match redirects to "/", so
+# without this, signInWithOAuth's redirectTo of "<origin>/auth/callback?next=..."
+# (or the confirmation email's link to "<origin>/auth/confirm?...") doesn't
+# match any allowed entry and GoTrue silently falls back to site_url,
+# dropping the auth code on "/" where nothing ever exchanges it for a
+# session. Both hostnames are listed since a developer may browse via either
+# "localhost" or "127.0.0.1", and wildcard forms are included in case this
+# GoTrue version treats the list as glob patterns despite the "exact URLs"
+# wording above.
 additional_redirect_urls = [
   "https://127.0.0.1:3000",
   "http://127.0.0.1:3000/auth/callback",
   "http://localhost:3000/auth/callback",
+  "http://127.0.0.1:3000/auth/confirm",
+  "http://localhost:3000/auth/confirm",
   "http://127.0.0.1:3000/**",
   "http://localhost:3000/**",
 ]
@@ -236,7 +242,7 @@ enable_signup = true
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true
 # If enabled, users need to confirm their email address before signing in.
-enable_confirmations = false
+enable_confirmations = true
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
 secure_password_change = false
 # Controls the minimum amount of time that must pass before sending another signup confirmation or password reset email.
@@ -260,6 +266,18 @@ otp_expiry = 3600
 # [auth.email.template.invite]
 # subject = "You have been invited"
 # content_path = "./supabase/templates/invite.html"
+
+# Custom confirmation-signup template. The built-in GoTrue confirmation link
+# (`{{ .SiteURL }}/auth/v1/verify?token=...&type=signup&redirect_to=...`)
+# performs an implicit-flow redirect with tokens in the URL fragment, which
+# this app's server-side PKCE session handling (via @supabase/ssr, see
+# app/auth/callback/route.ts) cannot consume. Pointing the link at our own
+# app/auth/confirm/route.ts instead lets that Route Handler call
+# supabase.auth.verifyOtp({ type: "signup", token_hash }) server-side and set
+# the session cookie itself, the same PKCE-compatible pattern used for OAuth.
+[auth.email.template.confirmation]
+subject = "Confirm your email"
+content_path = "./supabase/templates/confirmation.html"
 
 # Uncomment to customize notification email template
 # [auth.email.notification.password_changed]

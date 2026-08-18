@@ -36,6 +36,13 @@ export default async function LoginPage({
             </AlertDescription>
           </Alert>
         )}
+        {error === "confirmation_failed" && (
+          <Alert variant="destructive" role="alert">
+            <AlertDescription>
+              This confirmation link is invalid or has expired. Sign up again to get a new one.
+            </AlertDescription>
+          </Alert>
+        )}
         <LoginForm next={next && next.startsWith("/") ? next : "/onboarding"} />
       </CardContent>
     </Card>
