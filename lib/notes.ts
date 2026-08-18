@@ -3,7 +3,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Tables } from "./supabase/database.types";
 import { NOTES_PAGE_SIZE, DEFAULT_NOTE_SORT, type NoteSort } from "./note-query-params";
 
-export type NoteRow = Tables<"notes">;
+export type NoteAttachmentRow = Tables<"note_attachments">;
+
+// note_attachments comes along embedded on every note (see the dataQuery's
+// "*, note_attachments(*)" select below) -- safe to always assume present
+// (possibly empty) rather than optional, since PostgREST always returns the
+// embedded array key even when there are zero matching rows.
+export type NoteRow = Tables<"notes"> & { note_attachments: NoteAttachmentRow[] };
 
 // Sort/pagination constants and ?page=/?sort= parsers live in
 // lib/note-query-params.ts (no "server-only", no imports) so client
@@ -128,10 +134,23 @@ export async function getOrganizationNotes(
   // the count just measured -- except for the rare TOCTOU window between
   // the two requests (concurrent deletes could shrink the real total again
   // in between), handled defensively below rather than assumed away.
-  let dataQuery = supabase.from("notes").select("*").eq("organization_id", organizationId);
+  //
+  // "*, note_attachments(*)" pulls each note's attachments in the same
+  // round trip (rather than a second query per note, or per page) -- safe
+  // to embed unconditionally like this because PostgREST enforces the
+  // EMBEDDED table's own RLS independently of the parent query: a viewer
+  // only ever sees note_attachments rows "note_attachments_select_members"
+  // (supabase/migrations/20260818222947_add_note_attachments.sql) would let
+  // them see on their own, exactly as if they'd queried that table
+  // directly. The count query above deliberately does NOT select this --
+  // it only needs a row count for pagination, not the nested data.
+  let dataQuery = supabase.from("notes").select("*, note_attachments(*)").eq("organization_id", organizationId);
   if (searchPattern) {
     dataQuery = dataQuery.or(`title.ilike.${searchPattern},body.ilike.${searchPattern}`);
   }
+  // Oldest-first within each note -- i.e. upload order -- independent of
+  // whatever sort the notes themselves are ordered by below.
+  dataQuery = dataQuery.order("created_at", { foreignTable: "note_attachments", ascending: true });
 
   const orderedQuery =
     sort === "oldest"

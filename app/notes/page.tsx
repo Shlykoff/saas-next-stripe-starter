@@ -149,6 +149,8 @@ export default async function NotesPage({
               note={note}
               isOwnNote={note.author_id === user.id}
               canManage={note.author_id === user.id || isOwner}
+              currentUserId={user.id}
+              isOrgOwner={isOwner}
             />
           ))}
         </div>

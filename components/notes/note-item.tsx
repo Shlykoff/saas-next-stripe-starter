@@ -10,6 +10,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
+import { NoteAttachmentsList } from "@/components/notes/note-attachments-list";
+import { AttachmentUpload } from "@/components/notes/attachment-upload";
 
 const initialState: NoteActionState = { error: null };
 
@@ -17,6 +19,8 @@ export function NoteItem({
   note,
   canManage,
   isOwnNote,
+  currentUserId,
+  isOrgOwner,
 }: {
   note: NoteRow;
   /** True if the signed-in user is the author OR the org owner -- mirrors
@@ -27,6 +31,17 @@ export function NoteItem({
    *  expose one that actually works. */
   canManage: boolean;
   isOwnNote: boolean;
+  /** Signed-in user's id -- passed down (rather than read inside
+   *  NoteAttachmentsList) so this component tree never needs its own
+   *  supabase.auth.getUser() call; app/notes/page.tsx already has it. */
+  currentUserId: string;
+  /** True if the signed-in user is this ORGANIZATION's owner -- NOT the
+   *  same thing as `canManage` above, which is about the NOTE's author.
+   *  Attachment deletion is gated to the attachment's uploader OR the org
+   *  owner (RLS policy "note_attachments_delete_uploader_or_owner"), a
+   *  different pairing than who can edit the note's own title/body -- see
+   *  components/notes/note-attachments-list.tsx's doc comment. */
+  isOrgOwner: boolean;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [deleteState, deleteAction, isDeleting] = useActionState(deleteNote, initialState);
@@ -79,6 +94,14 @@ export function NoteItem({
           <p className="whitespace-pre-wrap text-sm text-foreground">{note.body}</p>
         </CardContent>
       )}
+      <CardContent className="flex flex-col gap-3 border-t pt-4">
+        <NoteAttachmentsList
+          attachments={note.note_attachments}
+          currentUserId={currentUserId}
+          isOrgOwner={isOrgOwner}
+        />
+        <AttachmentUpload noteId={note.id} />
+      </CardContent>
       {deleteState.error && (
         <CardFooter>
           <Alert variant="destructive" role="alert" className="w-full">
