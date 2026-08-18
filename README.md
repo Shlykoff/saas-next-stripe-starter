@@ -1,64 +1,74 @@
 # SaaS Starter
 
+**English** | [Русский](README.ru.md)
+
 [![CI](https://github.com/Shlykoff/saas-next-stripe-starter/actions/workflows/ci.yml/badge.svg)](https://github.com/Shlykoff/saas-next-stripe-starter/actions/workflows/ci.yml)
 
-**Живое демо:** https://saas.shlykoff.com — тестовые доступы и карты см. в разделах ниже ("Запуск локально" для сид-аккаунтов, "Тестовые карты" для Stripe).
+**Live demo:** https://saas.shlykoff.com — test accounts and cards are listed in the sections below ("Running locally" for seeded accounts, "Test cards" for Stripe).
 
-SaaS-стартер с подпиской: Next.js (App Router) + Supabase (Auth/Postgres/RLS) + Stripe (Checkout, Customer Portal, Webhooks). Полное ТЗ — `docs/spec.md`, контекст для агентов — `CLAUDE.md`.
+A subscription SaaS starter: Next.js (App Router) + Supabase (Auth/Postgres/RLS) + Stripe (Checkout, Customer Portal, Webhooks). Full spec — `docs/spec.md`; agent context — `CLAUDE.md`.
 
-> Статус: MVP-флоу собран целиком, задеплоен на прод (Vercel + hosted Supabase + Stripe test mode + Resend) и вручную пройден в браузере от начала до конца — регистрация с обязательным подтверждением email (реальная доставка через Resend), вход через Google OAuth, онбординг (создание workspace), тарифы → Stripe Checkout, апгрейд плана Basic→Pro прямо в Stripe Customer Portal с немедленным списанием разницы, личный кабинет со статусом/названием подписки, продуктовая фича `/notes` (реальный CRUD с organization-scoped RLS) гейтится по статусу подписки.
+> Status: the MVP flow is fully built, deployed to production (Vercel + hosted Supabase + Stripe test mode + Resend), and manually walked through end-to-end in a real browser — signup with mandatory email confirmation (real delivery via Resend), Google OAuth sign-in, onboarding (workspace creation), pricing → Stripe Checkout, a Basic→Pro upgrade directly in the Stripe Customer Portal with an immediate prorated charge, a dashboard showing plan name/status, and the gated product feature `/notes` (real CRUD with organization-scoped RLS) behind subscription status.
 
-<!-- TODO: скриншоты/GIF основных экранов (pricing, dashboard, notes paywall) -->
+## Screenshots
 
-## Стек
+| Landing | Pricing | Dashboard |
+|---|---|---|
+| ![Landing page](docs/screenshots/landing.png) | ![Pricing page, current plan highlighted](docs/screenshots/pricing.png) | ![Dashboard with active subscription](docs/screenshots/dashboard.png) |
+
+| Notes (gated feature) | Stripe Customer Portal |
+|---|---|
+| ![Notes CRUD](docs/screenshots/notes.png) | ![Stripe Customer Portal — plan switching](docs/screenshots/billing-portal.png) |
+
+## Stack
 
 Next.js 16 (App Router, Server Actions, Server Components) · Supabase (Auth + Postgres + RLS) · Stripe (Checkout, Customer Portal, Webhooks) · Tailwind v4 + shadcn/ui (base-ui) · TypeScript strict.
 
-## Функционал
+## Features
 
-- **Регистрация/логин** (`/signup`, `/login`) — email+пароль через Server Actions (`app/actions/auth.ts`) + кнопка "Continue with Google" (OAuth, PKCE-флоу через `/auth/callback`). Серверная валидация email/пароля, понятные сообщения об ошибках (неверный пароль, уже зарегистрирован, email не подтверждён). **Email-подтверждение обязательно** (`auth.email.enable_confirmations = true` в `supabase/config.toml`): после `/signup` логин заблокирован, пока пользователь не перейдёт по ссылке из письма. Ссылка ведёт на собственный роут приложения `/auth/confirm` (`app/auth/confirm/route.ts`, кастомный темплейт `supabase/templates/confirmation.html`), а не на встроенный `.../auth/v1/verify` Supabase — это нужно для совместимости с PKCE-флоу, который использует остальное приложение (тот же паттерн явной записи cookies на response, что и в `/auth/callback`).
-- **Онбординг** (`/onboarding`) — форма создания organization (name/slug); RLS-триггер в БД делает создателя owner'ом автоматически. Redirect на `/dashboard`, если organization уже есть.
-- **Тарифы** (`/pricing`) — 2 плана (Basic/Pro) из `lib/plans.ts`, кнопка Subscribe → `createCheckoutSession` → Stripe Checkout. Показывает текущий план вместо кнопки, если подписка уже активна; для не-owner'ов кнопка скрыта (реальная защита — на уровне server action, см. `requireOrgOwner` в `app/actions/billing.ts`).
-- **Личный кабинет** (`/dashboard`) — название и статус текущего плана (`lib/plans.ts`'s `planForPriceId`, обратный поиск по `subscriptions.stripe_price_id`), дата продления, кнопка "Manage billing" → Stripe Customer Portal. Баннер "оформите подписку" / "обновите способ оплаты", если подписки нет или платёж не прошёл.
-- **Notes** (`/notes`, gated) — доступ только при `subscriptions.status in ('active', 'trialing')`, проверка выполняется на сервере в `app/notes/page.tsx` через `lib/subscription-access.ts` + RLS-защищённый запрос к `subscriptions` (не просто скрытие кнопки — организация без подписки физически не получает разметку контента). Под гейтингом — реальный CRUD над таблицей `notes` (`supabase/migrations/20260817212642_add_notes.sql`): общие для организации заметки, создать/редактировать может любой участник, удалить/отредактировать чужую заметку — только owner (это делает RLS-политика, не application-код — см. `app/actions/notes.ts`).
-- **Роуты защищены** и на уровне `proxy.ts` (Next.js 16 переименовал `middleware.ts` в `proxy.ts`; редирект на `/login` до рендера), и повторно на уровне каждой server component-страницы (реальная проверка, а не UX-удобство).
+- **Sign up / sign in** (`/signup`, `/login`) — email+password via Server Actions (`app/actions/auth.ts`) plus a "Continue with Google" button (OAuth, PKCE flow through `/auth/callback`). Server-side email/password validation, clear error messages (wrong password, already registered, email not confirmed). **Email confirmation is mandatory** (`auth.email.enable_confirmations = true` in `supabase/config.toml`): after `/signup`, sign-in is blocked until the user clicks the link in the confirmation email. The link points at the app's own `/auth/confirm` route (`app/auth/confirm/route.ts`, custom template `supabase/templates/confirmation.html`) instead of Supabase's built-in `.../auth/v1/verify` — needed for compatibility with the PKCE flow the rest of the app uses (same explicit cookie-write-on-response pattern as `/auth/callback`).
+- **Onboarding** (`/onboarding`) — a form to create an organization (name/slug); a DB trigger makes the creator the owner automatically. Redirects to `/dashboard` if an organization already exists.
+- **Pricing** (`/pricing`) — 2 plans (Basic/Pro) from `lib/plans.ts`, a Subscribe button → `createCheckoutSession` → Stripe Checkout. Shows the current plan instead of the button once a subscription is active; the button is hidden for non-owners (the real enforcement is at the server-action level — see `requireOrgOwner` in `app/actions/billing.ts`).
+- **Dashboard** (`/dashboard`) — current plan name and status (`lib/plans.ts`'s `planForPriceId`, a reverse lookup on `subscriptions.stripe_price_id`), renewal date, and a "Manage billing" button → Stripe Customer Portal. A banner prompts to subscribe / update payment method when there's no subscription or a payment failed.
+- **Notes** (`/notes`, gated) — access only when `subscriptions.status in ('active', 'trialing')`, checked server-side in `app/notes/page.tsx` via `lib/subscription-access.ts` plus an RLS-protected query against `subscriptions` (not just hiding a button — an organization without a subscription never receives the content markup at all). Behind the gate is real CRUD over the `notes` table (`supabase/migrations/20260817212642_add_notes.sql`): notes are shared across the organization, any member can create/edit, but editing/deleting someone else's note is owner-only (enforced by an RLS policy, not application code — see `app/actions/notes.ts`).
+- **Routes are protected** both at the `proxy.ts` level (Next.js 16 renamed `middleware.ts` to `proxy.ts`; redirects to `/login` before render) and again at every server component page (a real check, not just UX convenience).
 
-## Запуск локально (весь флоу целиком)
+## Running locally (full flow)
 
 ```bash
 npm install
-supabase start          # поднимает локальный Supabase в Docker
+supabase start          # spins up local Supabase in Docker
 cp .env.example .env.local
-# заполнить .env.local значениями из `supabase status` + Stripe test-ключами (см. ниже)
+# fill in .env.local with values from `supabase status` + Stripe test keys (see below)
 npm run dev
 ```
 
-**Пока идёт локальная разработка, держите `stripe listen --forward-to localhost:3000/api/webhooks/stripe` запущенным в отдельном терминале постоянно** (не только на время одного теста) — без него Stripe физически не может доставить вебхук на `localhost`, и `checkout.session.completed`/`customer.subscription.*` события просто теряются: Checkout пройдёт успешно, но `/dashboard` так и останется на "No active subscription", как будто оплата не сработала. Если забыли и уже потеряли событие — не нужно повторять Checkout, событие уже есть в Stripe: `stripe events list --limit 5` найдёт его `evt_...`, `stripe events resend <event_id> --confirm` доставит повторно, как только `stripe listen` снова поднят.
+**Keep `stripe listen --forward-to localhost:3000/api/webhooks/stripe` running in a separate terminal for the whole local dev session** (not just during one test) — without it, Stripe physically cannot deliver a webhook to `localhost`, and `checkout.session.completed`/`customer.subscription.*` events are simply lost: Checkout succeeds, but `/dashboard` stays on "No active subscription" as if the payment failed. If you forgot and already missed an event, there's no need to redo Checkout — the event already happened in Stripe: `stripe events list --limit 5` finds its `evt_...`, and `stripe events resend <event_id> --confirm` redelivers it once `stripe listen` is running again.
 
-> Известное ограничение окружения: если `npm run dev` падает в цикл `Watchpack Error (watcher): EMFILE: too many open files`, это лимит файловых дескрипторов конкретной песочницы/машины, не баг проекта — `npm run build && npm run start` (без persistent watcher) не подвержен этой проблеме и подходит для сквозной проверки флоу.
+> Known environment quirk: if `npm run dev` loops on `Watchpack Error (watcher): EMFILE: too many open files`, that's a file-descriptor limit of the particular sandbox/machine, not a project bug — `npm run build && npm run start` (no persistent watcher) isn't affected and works fine for an end-to-end check.
 
-**Держите один и тот же хост везде: либо `127.0.0.1`, либо `localhost` — не смешивайте.** Браузеры считают `localhost` и `127.0.0.1` разными хостами для куки, хотя оба указывают на один и тот же сервер. Если зашли в приложение через `http://127.0.0.1:3000`, а `NEXT_PUBLIC_APP_URL` в `.env.local` при этом стоит `http://localhost:3000` — после Stripe Checkout вас редиректнет обратно на `localhost`, где нет вашей сессионной cookie, и `/dashboard` покажет "не авторизован", хотя оплата прошла успешно. Та же логика для Google OAuth и для ссылки подтверждения email: `redirectTo`/ссылка из письма, которую реально шлёт браузер, должна быть в `additional_redirect_urls` в `supabase/config.toml` — если она указана только для `site_url` (голого корня) без пути `/auth/callback` или `/auth/confirm`, GoTrue молча подменит редирект на `site_url`, и код авторизации никогда не будет обменян на сессию. `.env.example` и `supabase/config.toml` в этом репозитории уже согласованы на `127.0.0.1` — меняя один, обновляйте оба.
+**Use the same host everywhere: either `127.0.0.1` or `localhost` — never mix them.** Browsers treat `localhost` and `127.0.0.1` as different hosts for cookie purposes, even though both point at the same server. If you sign in via `http://127.0.0.1:3000` while `NEXT_PUBLIC_APP_URL` in `.env.local` is set to `http://localhost:3000`, Stripe will redirect you back to a host that never received your session cookie post-Checkout, and `/dashboard` will show "not signed in" even though the payment succeeded. Same logic for Google OAuth and the email confirmation link: the `redirectTo`/emailed link the browser actually uses must be in `additional_redirect_urls` in `supabase/config.toml` — if only `site_url` (the bare origin) is listed, without the `/auth/callback` or `/auth/confirm` path, GoTrue silently falls back to `site_url`, and the auth code never gets exchanged for a session. `.env.example` and `supabase/config.toml` in this repo are already aligned on `127.0.0.1` — if you change one, update the other.
 
-Пройти весь флоу вручную:
+Walking the full flow by hand:
 
-1. Открыть `http://localhost:3000`, нажать "Get started" → `/signup`, зарегистрироваться email+паролем. Сессия **не** создаётся сразу — форма покажет "Account created. Check your email to confirm your address before signing in.". Открыть Mailpit (локальный SMTP-перехватчик, письма никуда реально не уходят) на `http://127.0.0.1:54324`, найти письмо "Confirm your email", перейти по ссылке — она заведёт на `/auth/confirm` и залогинит. Попытка войти до подтверждения вернёт понятную ошибку "Email not confirmed".
-2. Onboarding: ввести имя/slug workspace → redirect на `/dashboard`.
-3. `/dashboard` покажет баннер "No active subscription" → перейти на `/pricing`.
-4. Нажать "Subscribe" на любом плане → Stripe Checkout (test mode) → оплатить тестовой картой `4242 4242 4242 4242` (см. "Тестовые карты" ниже).
-5. Redirect обратно на `/dashboard?checkout=success`. Статус подписки обновляется асинхронно через webhook — требует либо `stripe listen --forward-to localhost:3000/api/webhooks/stripe` запущенным заранее (см. ниже), либо ручного триггера `stripe trigger checkout.session.completed`.
-6. После того как статус подписки стал `active`/`trialing` — `/notes` открывает реальный список заметок вместо paywall: можно создать заметку, отредактировать/удалить свою; owner организации может отредактировать/удалить любую заметку в организации (модерация), обычный member — только свои.
+1. Open `http://localhost:3000`, click "Get started" → `/signup`, register with email+password. A session is **not** created immediately — the form shows "Account created. Check your email to confirm your address before signing in." Open Mailpit (a local SMTP catcher — no real email is sent) at `http://127.0.0.1:54324`, find the "Confirm your email" message, and follow the link — it lands on `/auth/confirm` and signs you in. Trying to sign in before confirming returns a clear "Email not confirmed" error.
+2. Onboarding: enter a workspace name/slug → redirect to `/dashboard`.
+3. `/dashboard` shows a "No active subscription" banner → go to `/pricing`.
+4. Click "Subscribe" on either plan → Stripe Checkout (test mode) → pay with the test card `4242 4242 4242 4242` (see "Test cards" below).
+5. Redirect back to `/dashboard?checkout=success`. Subscription status updates asynchronously via the webhook — this requires either `stripe listen --forward-to localhost:3000/api/webhooks/stripe` running beforehand (see below), or a manual `stripe trigger checkout.session.completed`.
+6. Once the subscription status is `active`/`trialing`, `/notes` shows the real note list instead of the paywall: you can create a note, edit/delete your own; the organization owner can edit/delete any note in the organization (moderation), a regular member only their own.
 
-Либо не проходить Checkout руками, а использовать готовые тестовые аккаунты из `supabase/seed.sql` (загружаются автоматически при `supabase db reset`) — пароль для всех: `password123`. Эти аккаунты создаются напрямую в `auth.users` с уже проставленным `email_confirmed_at`, так что email-подтверждение для них не требуется, логин работает сразу:
+Alternatively, skip Checkout entirely and use the seeded test accounts from `supabase/seed.sql` (loaded automatically by `supabase db reset`) — password for all of them: `password123`. These accounts are inserted directly into `auth.users` with `email_confirmed_at` already set, so email confirmation isn't required and sign-in works immediately:
 
-| Email | Организация | Роль | Подписка |
+| Email | Organization | Role | Subscription |
 |---|---|---|---|
-| `owner_a@example.com` | Acme | owner | `active` — `/notes` открыт |
-| `member_a@example.com` | Acme | member | `active` — `/notes` открыт, billing скрыт (не owner) |
-| `owner_b@example.com` | Globex | owner | нет подписки — `/notes` показывает paywall |
+| `owner_a@example.com` | Acme | owner | `active` — `/notes` unlocked |
+| `member_a@example.com` | Acme | member | `active` — `/notes` unlocked, billing hidden (not owner) |
+| `owner_b@example.com` | Globex | owner | no subscription — `/notes` shows the paywall |
 
-Тесты: `npm run test` (Vitest). Требует запущенный локальный Supabase (`supabase start`) — интеграционные тесты (вебхук, гейтинг `/notes` по подписке, авторизация CRUD над `notes`) пишут/читают реальные таблицы локальной БД и используют сид-аккаунты из таблицы выше.
+Tests: `npm run test` (Vitest). Requires a running local Supabase (`supabase start`) — the integration tests (webhook, `/notes` subscription gating, `notes` CRUD authorization) read/write real tables in the local database and use the seed accounts from the table above.
 
-Если меняли схему БД (новая миграция) — перегенерируйте TS-типы, иначе `lib/supabase/database.types.ts` расходится со схемой молча:
+If you changed the DB schema (a new migration), regenerate the TS types, or `lib/supabase/database.types.ts` silently drifts out of sync with the schema:
 
 ```bash
 npm run db:types   # supabase gen types typescript --local > lib/supabase/database.types.ts
@@ -66,59 +76,59 @@ npm run db:types   # supabase gen types typescript --local > lib/supabase/databa
 
 ## Google OAuth
 
-Кнопка "Continue with Google" (`components/auth/google-oauth-button.tsx`) вызывает `supabase.auth.signInWithOAuth({ provider: "google" })` и была живьём проверена end-to-end с реальным Google-аккаунтом. Без настоящих Google OAuth credentials в окружении, где поднимается `supabase start`, кнопка всё равно рендерится, но упадёт на экране согласия Google (`Error 401: invalid_client`) — это ожидаемое поведение "из коробки" при первом клоне репозитория, credentials не коммитятся (`.env.local` в `.gitignore`).
+The "Continue with Google" button (`components/auth/google-oauth-button.tsx`) calls `supabase.auth.signInWithOAuth({ provider: "google" })` and has been verified live end-to-end with a real Google account. Without real Google OAuth credentials in the environment where `supabase start` runs, the button still renders, but fails on Google's consent screen (`Error 401: invalid_client`) — expected out-of-the-box behavior on a fresh clone, since credentials aren't committed (`.env.local` is in `.gitignore`).
 
-Что нужно, чтобы OAuth реально заработал (в новом окружении/у нового разработчика):
+What's needed to make OAuth actually work (in a new environment / for a new developer):
 
-1. Создать OAuth 2.0 Client в [Google Cloud Console](https://console.cloud.google.com/apis/credentials) (Application type: **Web application**).
-2. Authorized redirect URI (локально): `http://127.0.0.1:54321/auth/v1/callback` — это callback самого Supabase Auth, а не `/auth/callback` этого приложения (тот стоит на шаг дальше по цепочке редиректов).
-3. Экспортировать `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` в shell **перед** запуском `supabase start` (см. `supabase/config.toml`'s `[auth.external.google]` и `.env.example` — эти переменные подставляются процессом `supabase start` через `env(...)`, а не читаются Next.js напрямую):
+1. Create an OAuth 2.0 Client in the [Google Cloud Console](https://console.cloud.google.com/apis/credentials) (Application type: **Web application**).
+2. Authorized redirect URI (locally): `http://127.0.0.1:54321/auth/v1/callback` — this is Supabase Auth's own callback, not this app's `/auth/callback` (which is one hop further down the redirect chain).
+3. Export `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` in the shell **before** running `supabase start` (see `supabase/config.toml`'s `[auth.external.google]` and `.env.example` — these variables are substituted in by the `supabase start` process via `env(...)`, not read by Next.js directly):
    ```bash
    export GOOGLE_OAUTH_CLIENT_ID=...
    export GOOGLE_OAUTH_CLIENT_SECRET=...
    supabase start
    ```
-4. Для прод-деплоя — то же самое с реальным доменом в redirect URI, и те же переменные заданы в окружении Vercel/хостинга Supabase.
+4. For a production deploy — the same thing, with the real domain in the redirect URI, and the same variables set in the Vercel/hosted-Supabase environment.
 
 ## Stripe
 
-### Переменные окружения
+### Environment variables
 
-Все — в `.env.example`. Коротко:
+All of them are in `.env.example`. Briefly:
 
-| Переменная | Назначение |
+| Variable | Purpose |
 |---|---|
-| `STRIPE_SECRET_KEY` | Секретный ключ Stripe (test mode: `sk_test_...`), используется только на сервере (`lib/stripe.ts`). |
-| `STRIPE_WEBHOOK_SECRET` | Секрет для проверки подписи вебхука (`stripe.webhooks.constructEvent`). Локально — из `stripe listen` (см. ниже), в проде — из Stripe Dashboard при регистрации endpoint URL. |
-| `STRIPE_PRICE_ID_BASIC`, `STRIPE_PRICE_ID_PRO` | Id тарифных Price, созданных заранее в Stripe Dashboard (test mode). |
-| `STRIPE_PORTAL_CONFIGURATION_ID` | Id Billing Portal configuration с включённым `subscription_update` (переключение плана прямо в Customer Portal). См. "Смена плана в Customer Portal" ниже — без неё кнопка "Manage billing" открывает портал, где можно только отменить подписку или сменить карту, не сменить план. |
-| `NEXT_PUBLIC_APP_URL` | Базовый URL приложения — используется для `success_url`/`cancel_url`/`return_url` Checkout и Customer Portal. |
-| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Публичные Supabase-данные, для клиента и для server actions, работающих от имени текущего пользователя. |
-| `SUPABASE_SERVICE_ROLE_KEY` | Только сервер. Используется исключительно в `lib/supabase/service-role.ts` (webhook-обработчик), никогда в клиентском коде. |
+| `STRIPE_SECRET_KEY` | Stripe secret key (test mode: `sk_test_...`), used server-side only (`lib/stripe.ts`). |
+| `STRIPE_WEBHOOK_SECRET` | Secret for verifying the webhook signature (`stripe.webhooks.constructEvent`). Locally — from `stripe listen` (see below); in production — from the Stripe Dashboard when registering the endpoint URL. |
+| `STRIPE_PRICE_ID_BASIC`, `STRIPE_PRICE_ID_PRO` | Ids of the plan Prices, created ahead of time in the Stripe Dashboard (test mode). |
+| `STRIPE_PORTAL_CONFIGURATION_ID` | Id of a Billing Portal configuration with `subscription_update` enabled (plan switching right in the Customer Portal). See "Switching plans in the Customer Portal" below — without it, "Manage billing" only lets a customer cancel or update their card, not change plans. |
+| `NEXT_PUBLIC_APP_URL` | The app's base URL — used for Checkout's/Customer Portal's `success_url`/`cancel_url`/`return_url`. |
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Public Supabase values, for the client and for server actions acting on behalf of the current user. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-only. Used exclusively in `lib/supabase/service-role.ts` (the webhook handler), never in client code. |
 
-test/live режимы Stripe разделены строго через эти переменные: для локальной разработки и CI используется отдельный набор test-ключей, для прод-деплоя на Vercel — отдельный набор live-ключей, никогда не смешиваются.
+Stripe's test/live modes are strictly separated via these variables: local development and CI use one set of test keys, a Vercel production deploy uses a separate set of live keys — the two are never mixed.
 
-### Тестовые карты
+### Test cards
 
-Для оплаты в Stripe Checkout (test mode):
+For paying in Stripe Checkout (test mode):
 
-- Успешный платёж: `4242 4242 4242 4242`, любая future-дата, любой CVC, любой ZIP.
-- Отклонённый платёж (для проверки `invoice.payment_failed`): `4000 0000 0000 0341` (карта проходит на этапе Checkout, но списание/продление подписки отклоняется).
+- Successful payment: `4242 4242 4242 4242`, any future date, any CVC, any ZIP.
+- Declined payment (to exercise `invoice.payment_failed`): `4000 0000 0000 0341` (the card passes at Checkout, but the subscription's charge/renewal is declined).
 
-Полный список тестовых карт: https://docs.stripe.com/testing
+Full list of test cards: https://docs.stripe.com/testing
 
-### Тестирование вебхука локально через Stripe CLI
+### Testing the webhook locally via the Stripe CLI
 
-Требуется реальный Stripe-аккаунт (test mode) и [Stripe CLI](https://docs.stripe.com/stripe-cli).
+Requires a real Stripe account (test mode) and the [Stripe CLI](https://docs.stripe.com/stripe-cli).
 
 ```bash
 stripe login
 stripe listen --forward-to localhost:3000/api/webhooks/stripe
 ```
 
-Команда выведет `whsec_...` — это значение и есть `STRIPE_WEBHOOK_SECRET` для `.env.local` на время локальной разработки (при каждом запуске `stripe listen` CLI может выдавать новый секрет — обновляйте `.env.local` соответственно).
+This prints a `whsec_...` — that value is `STRIPE_WEBHOOK_SECRET` for `.env.local` while developing locally (the CLI may issue a new secret each time `stripe listen` runs — update `.env.local` accordingly).
 
-Затем в отдельном терминале, пока `npm run dev` и `stripe listen` работают, можно сгенерировать тестовые события:
+Then, in a separate terminal while `npm run dev` and `stripe listen` are both running, you can generate test events:
 
 ```bash
 stripe trigger checkout.session.completed
@@ -127,23 +137,23 @@ stripe trigger customer.subscription.deleted
 stripe trigger invoice.payment_failed
 ```
 
-Либо пройти реальный Checkout flow, будучи залогиненным с workspace, через `/pricing` тестовой картой выше — `stripe listen` перешлёт событие на локальный `/api/webhooks/stripe`.
+Or just run the real Checkout flow while signed in with a workspace, via `/pricing` with the test card above — `stripe listen` will forward the event to the local `/api/webhooks/stripe`.
 
-### Автоматизированный тест вебхука (без реального Stripe-аккаунта)
+### Automated webhook test (no real Stripe account needed)
 
-`tests/webhooks-stripe.test.ts` — интеграционный тест на `app/api/webhooks/stripe/route.ts`, использующий `stripe.webhooks.generateTestHeaderString` (тестовая утилита stripe-node, генерирует валидную подпись без реального аккаунта) и локальный Supabase. Проверяет:
+`tests/webhooks-stripe.test.ts` — an integration test against `app/api/webhooks/stripe/route.ts`, using `stripe.webhooks.generateTestHeaderString` (a stripe-node test utility that generates a valid signature without a real account) and the local Supabase instance. It checks:
 
-- обработку события с валидной подписью и запись в `subscriptions`;
-- идемпотентность — повторная доставка того же `event.id` не применяется повторно;
-- отклонение запроса без `stripe-signature` / с невалидной подписью (400), без обработки тела.
+- processing a validly-signed event and writing to `subscriptions`;
+- idempotency — redelivering the same `event.id` isn't applied twice;
+- rejecting a request with no `stripe-signature` / an invalid signature (400), without processing the body.
 
-Требует только запущенный локальный Supabase (`supabase start`) — реальные Stripe-ключи не нужны, т.к. `constructEvent`/`generateTestHeaderString` — чистые локальные HMAC-операции без сетевых вызовов.
+Requires only a running local Supabase (`supabase start`) — no real Stripe keys needed, since `constructEvent`/`generateTestHeaderString` are pure local HMAC operations with no network calls.
 
-### Смена плана в Customer Portal
+### Switching plans in the Customer Portal
 
-Дефолтная (авто-созданная) конфигурация Stripe Customer Portal в свежем аккаунте **не разрешает менять план** — только отменить подписку или обновить способ оплаты. Чтобы кнопка "Manage billing" позволяла апгрейд/даунгрейд между Basic и Pro, нужна отдельная portal configuration с `features.subscription_update.enabled = true`, оба Price перечислены как переключаемые продукты, и `proration_behavior = "always_invoice"` (важно: значение по умолчанию `create_prorations` только *копит* разницу до следующего цикла оплаты вместо немедленного списания — если хочется списывать сразу при апгрейде, нужен именно `always_invoice`).
+A fresh Stripe account's default (auto-created) Customer Portal configuration **doesn't allow changing plans** — only cancelling the subscription or updating the payment method. For the "Manage billing" button to allow an upgrade/downgrade between Basic and Pro, you need a separate portal configuration with `features.subscription_update.enabled = true`, both Prices listed as switchable products, and `proration_behavior = "always_invoice"` (important: the default value, `create_prorations`, only *accumulates* the price difference onto the *next* regular invoice instead of charging it immediately — if you want an upgrade to be charged right away, you need `always_invoice` specifically).
 
-Создать такую конфигурацию можно один раз через API (сохраняет `id`, который идёт в `STRIPE_PORTAL_CONFIGURATION_ID`):
+You can create such a configuration once via the API (save the `id` it returns — that's `STRIPE_PORTAL_CONFIGURATION_ID`):
 
 ```bash
 curl https://api.stripe.com/v1/billing_portal/configurations \
@@ -159,27 +169,26 @@ curl https://api.stripe.com/v1/billing_portal/configurations \
   -d "features[payment_method_update][enabled]=true"
 ```
 
-`app/actions/billing.ts`'s `createPortalSession` передаёт `configuration: STRIPE_PORTAL_CONFIGURATION_ID` в `stripe.billingPortal.sessions.create()`, если переменная задана; без неё используется дефолтная конфигурация аккаунта (без переключения плана).
+`app/actions/billing.ts`'s `createPortalSession` passes `configuration: STRIPE_PORTAL_CONFIGURATION_ID` to `stripe.billingPortal.sessions.create()` when the variable is set; without it, the account's default configuration is used (no plan switching).
 
-## Что нужно сделать вручную перед первым «живым» запуском Stripe
+## Manual steps before the first "live" Stripe run
 
-1. Создать Stripe-аккаунт (если его ещё нет) и включить test mode.
-2. Создать 2 Product/Price в Stripe Dashboard (test mode) под тарифы Basic/Pro, вписать их id в `STRIPE_PRICE_ID_BASIC` / `STRIPE_PRICE_ID_PRO`.
-3. Скопировать `sk_test_...` ключ в `STRIPE_SECRET_KEY`.
-4. Запустить `stripe listen --forward-to localhost:3000/api/webhooks/stripe`, вписать выданный `whsec_...` в `STRIPE_WEBHOOK_SECRET`.
-5. Создать billing portal configuration (см. "Смена плана в Customer Portal" выше), вписать её id в `STRIPE_PORTAL_CONFIGURATION_ID`.
-6. Пройти Checkout тестовой картой `4242 4242 4242 4242` и убедиться, что `subscriptions` в локальной БД обновилась.
+1. Create a Stripe account (if you don't have one yet) and enable test mode.
+2. Create 2 Products/Prices in the Stripe Dashboard (test mode) for the Basic/Pro plans, and put their ids in `STRIPE_PRICE_ID_BASIC` / `STRIPE_PRICE_ID_PRO`.
+3. Copy the `sk_test_...` key into `STRIPE_SECRET_KEY`.
+4. Run `stripe listen --forward-to localhost:3000/api/webhooks/stripe`, and put the issued `whsec_...` into `STRIPE_WEBHOOK_SECRET`.
+5. Create a billing portal configuration (see "Switching plans in the Customer Portal" above), and put its id in `STRIPE_PORTAL_CONFIGURATION_ID`.
+6. Run through Checkout with the test card `4242 4242 4242 4242` and confirm `subscriptions` updated in the local database.
 
-## Ключевые технические решения
+## Key technical decisions
 
-**RLS deny-by-default, а не "приложение фильтрует по organization_id".** Каждая таблица с пользовательскими данными (`organizations`, `organization_members`, `subscriptions`, `notes`, `processed_stripe_events`) — `ENABLE` + `FORCE ROW LEVEL SECURITY`, отдельные `select`/`insert`/`update`/`delete` политики (не одна политика "на всё"), и запись статуса подписки доступна исключительно `service_role`. Это осознанный выбор в пользу "изоляция гарантируется на уровне БД" вместо "приложение обещает не забыть добавить `.eq('organization_id', ...)` в каждый запрос" — при мультитенантности одна забытая проверка в одном месте кода означает утечку данных между организациями. Цена этого решения: часть логики (кто может редактировать чужую заметку, кто последний owner организации) живёт в SQL-триггерах, а не в TypeScript — например, `trg_prevent_last_owner_change` использует `pg_advisory_xact_lock` по `organization_id`, чтобы сериализовать конкурентные попытки удалить последнего owner'а (наивная `count(*)`-проверка без блокировки не защищает от двух параллельных транзакций, которые обе увидят "ещё есть другой owner" и обе пройдут — воспроизведено и закрыто во время ревью).
+**RLS deny-by-default, rather than "the app filters by organization_id."** Every table with user data (`organizations`, `organization_members`, `subscriptions`, `notes`, `processed_stripe_events`) has `ENABLE` + `FORCE ROW LEVEL SECURITY`, separate `select`/`insert`/`update`/`delete` policies (never one blanket policy), and subscription-status writes are restricted to `service_role` alone. This is a deliberate choice in favor of "isolation is guaranteed at the database level" over "the app promises never to forget `.eq('organization_id', ...)` on every query" — in a multi-tenant system, one forgotten check in one place means a cross-organization data leak. The cost of this choice: some logic (who can edit someone else's note, who's an organization's last owner) lives in SQL triggers rather than TypeScript — e.g. `trg_prevent_last_owner_change` uses `pg_advisory_xact_lock` keyed on `organization_id` to serialize concurrent attempts to remove the last owner (a naive unlocked `count(*)` check doesn't protect against two parallel transactions that both see "there's still another owner" and both proceed — reproduced and closed during review).
 
-**Идемпотентность вебхука — claim/CAS state machine с fencing-токеном, не `insert ... on conflict do nothing`.** Наивная идемпотентность ("уже видели этот `event.id`? тогда игнорируем") ломается под конкурентной повторной доставкой одного и того же события (Stripe так и делает при медленном ответе): если "запись существует" трактуется как синоним "уже успешно обработано", гонка между двумя параллельными доставками может привести к тому, что обработчик отдаст Stripe `200 OK` на событие, которое по факту не применилось. `processed_stripe_events` вместо этого хранит явный `status` (`processing`/`succeeded`) и отдельную `claim_token`-колонку: конкурентный дубль либо не может забрать claim и получает `409` (форсируя честный Stripe-retry), либо видит `status='succeeded'` и только тогда отвечает `200 duplicate` — никогда не по факту одного лишь существования строки. Просроченный (не упавший, а просто медленный) claim может быть переподхвачен другим запросом по stale-таймауту; `claim_token` не даёт исходному "медленному" запросу тихо финализироваться поверх уже переподхваченного claim'а после того, как его владение истекло.
+**Webhook idempotency is a claim/CAS state machine with a fencing token, not `insert ... on conflict do nothing`.** Naive idempotency ("have we seen this `event.id`? then ignore it") breaks under concurrent redelivery of the same event (which Stripe does when a response is slow): if "the row exists" is treated as synonymous with "already successfully processed," a race between two concurrent deliveries can result in the handler acking Stripe with `200 OK` for an event that was never actually applied. `processed_stripe_events` instead holds an explicit `status` (`processing`/`succeeded`) and a separate `claim_token` column: a concurrent duplicate either can't claim ownership and gets a `409` (forcing a genuine Stripe retry), or sees `status='succeeded'` and only then responds `200 duplicate` — never based on a row's mere existence. A stale (not crashed, just slow) claim can be reclaimed by another request past a timeout; `claim_token` prevents the original "slow" request from silently finalizing on top of a claim that has already been reclaimed once its ownership has expired.
 
-**Явная запись cookies на response-объект в auth-роутах, а не ambient `cookies()` API.** `app/auth/callback/route.ts` (OAuth) и `app/auth/confirm/route.ts` (email-подтверждение) — оба Route Handler'а, возвращающие `NextResponse.redirect(...)`, и оба пишут Supabase-сессионные cookies явно на этот же самый response-объект (`response.cookies.set(...)` внутри `setAll`), а не полагаются на next/headers' `cookies().set()`. Причина — воспроизведённый на практике баг: ambient `cookies()`-мутация не гарантированно попадает именно на тот `NextResponse`, который Route Handler в итоге возвращает, из-за чего сессия успешно создавалась на сервере (Stripe/Supabase логи подтверждали `200`), но браузер её не получал и следующий запрос уже видел "нет сессии". Тот же класс осторожности — `signOut()` в `app/actions/auth.ts` использует `scope: "local"`, а не Supabase SDK-дефолт `scope: "global"`: глобальный logout убивает **все** сессии пользователя (все вкладки/устройства), что для кнопки "Sign out" в одной вкладке — избыточное и неожиданное поведение, обнаруженное живым тестированием (выход в одной вкладке ронял свежесозданную Google OAuth-сессию в другой).
+**Auth routes write cookies explicitly onto the response object, not via the ambient `cookies()` API.** `app/auth/callback/route.ts` (OAuth) and `app/auth/confirm/route.ts` (email confirmation) are both Route Handlers returning `NextResponse.redirect(...)`, and both write Supabase's session cookies explicitly onto that exact same response object (`response.cookies.set(...)` inside `setAll`) rather than relying on next/headers' `cookies().set()`. The reason is a bug reproduced in practice: the ambient `cookies()` mutation isn't reliably reflected onto the specific `NextResponse` a Route Handler ends up returning, which meant a session was successfully created server-side (Stripe/Supabase logs confirmed `200`), but the browser never received it, and the next request already saw "no session." The same class of caution applies to `signOut()` in `app/actions/auth.ts`, which uses `scope: "local"` rather than the Supabase SDK's default `scope: "global"`: a global sign-out kills **every** session for the user (every tab/device), which is excessive, unexpected behavior for a "Sign out" button in one tab — discovered by live testing (signing out in one tab dropped a freshly created Google OAuth session in another).
 
-## Что дальше
+## What's next
 
-- **Скриншоты/GIF** основных экранов (pricing, dashboard, notes paywall) — прод уже живой (`https://saas.shlykoff.com`), осталось только снять.
-- **Org switcher**: сейчас у пользователя предполагается ровно одна организация (`lib/org.ts`'s `getActiveOrganization` берёт первую по `created_at`); инвайт-флоу и мульти-org UI не входили в этот этап.
-- **Notes**: сейчас общие для всей организации, плоский список без пагинации/поиска/сортировки, без вложений и real-time обновлений между участниками (нужно обновить страницу, чтобы увидеть чужие правки). Хватает для демонстрации paywall-гейтинга; для реального продукта — отдельная итерация.
+- **Org switcher**: the app currently assumes exactly one organization per user (`lib/org.ts`'s `getActiveOrganization` takes the first one by `created_at`); an invite flow and multi-org UI weren't part of this stage.
+- **Notes**: currently shared across the whole organization, a flat list with no pagination/search/sorting, no attachments, and no real-time updates between members (you need to refresh to see someone else's edits). Enough to demonstrate paywall gating; a real product would need a separate iteration here.
