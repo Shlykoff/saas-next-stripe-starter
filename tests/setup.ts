@@ -26,6 +26,21 @@ vi.mock("server-only", () => ({}));
 // server just to satisfy this one call.
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
 
+// Without this, every test that exercises createInvite/removeMember (e.g.
+// tests/invites.test.ts, tests/members.test.ts) would make a REAL network
+// call to Resend using whatever RESEND_API_KEY happens to be in .env.local
+// -- sending a real email to a real inbox on every single local test run,
+// and failing outright in CI (a placeholder key gets a real 401 from
+// Resend's API, not a local no-op like the Stripe HMAC tests get). This
+// mock replaces the whole lib/resend module -- including its own
+// module-load-time "throw if RESEND_API_KEY is unset" guard -- so tests
+// never depend on a real key being present at all, mirroring how the
+// `server-only` mock above replaces a guard rather than satisfying it.
+vi.mock("@/lib/resend", () => ({
+  resend: { emails: { send: async () => ({ data: { id: "test-email-id" }, error: null }) } },
+  INVITE_EMAIL_FROM: "SaaS Starter <noreply@mail.shlykoff.com>",
+}));
+
 // Shared in-memory cookie jar, mocking next/headers's cookies() for every
 // test file. This is what BOTH of the following need, and need to agree
 // with each other on, within one test file's run:
