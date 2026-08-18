@@ -15,3 +15,13 @@ config({ path: path.resolve(__dirname, "../.env.local") });
 // tests so lib/stripe.ts and lib/supabase/*.ts (which import it as a
 // leak-into-client-bundle guard) can be imported directly.
 vi.mock("server-only", () => ({}));
+
+// revalidatePath() throws ("Invariant: static generation store missing")
+// when called outside an actual Next.js request/render context, which is
+// exactly the situation calling a "use server" action (e.g.
+// app/actions/notes.ts) directly from a Vitest test is. Next.js itself
+// wires this up to a real cache-invalidation side effect at request time;
+// here it's a no-op so server actions can be exercised end-to-end
+// (including their real success path) without spinning up a full Next.js
+// server just to satisfy this one call.
+vi.mock("next/cache", () => ({ revalidatePath: () => {} }));

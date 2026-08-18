@@ -34,6 +34,44 @@ export type Database = {
   }
   public: {
     Tables: {
+      notes: {
+        Row: {
+          author_id: string
+          body: string
+          created_at: string
+          id: string
+          organization_id: string
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          author_id: string
+          body?: string
+          created_at?: string
+          id?: string
+          organization_id: string
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          author_id?: string
+          body?: string
+          created_at?: string
+          id?: string
+          organization_id?: string
+          title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notes_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       organization_members: {
         Row: {
           created_at: string
