@@ -397,22 +397,63 @@ describe("acceptInvite (app/actions/invites.ts): happy path + concurrency", () =
       // Two independent FormData instances for the SAME token, submitted
       // concurrently against the SAME signed-in session -- this is exactly
       // what a double-submitted "Accept invite" click (or two tabs) would
-      // produce. Both are expected to succeed (redirect): acceptInvite's own
-      // doc comment explains why this is idempotent -- whichever INSERT
-      // loses the race to organization_members' unique constraint hits the
-      // 23505 branch (see the role-reconciliation fix above) instead of
-      // erroring, and the invite's `.eq("status", "pending")` UPDATE guard
-      // means whichever request updates second just affects zero rows
-      // rather than erroring.
+      // produce. acceptInvite's own doc comment explains why the DB side is
+      // idempotent: whichever INSERT loses the race to organization_members'
+      // unique constraint hits the 23505 branch instead of erroring, and the
+      // invite's `.eq("status", "pending")` UPDATE guard means whichever
+      // request updates second just affects zero rows rather than erroring.
+      //
+      // What ISN'T guaranteed is that BOTH calls reach that racy middle
+      // section at all: Promise.all schedules both async functions'
+      // *starts* together, but says nothing about how far apart their
+      // actual DB round-trips land in wall-clock time. If request A's own
+      // full round-trip (including its final "status = accepted" UPDATE
+      // commit) finishes before request B's very first SELECT (reading the
+      // invite by token) even fires, B never enters the race at all -- it
+      // reads status='accepted' from the start and correctly, harmlessly
+      // bails out at the early `invite.status !== "pending"` check with
+      // "This invite is no longer valid," never reaching redirect(). This
+      // is a real, environment-dependent difference (reproduced: passed
+      // requiring both redirects locally, failed the same assertion in CI
+      // on a fresh runner with different DB round-trip latency) -- not a
+      // flaky test to retry, but a wrong assumption in the test itself
+      // about a timing guarantee `Promise.all` never made. The actual
+      // contract worth asserting is: at least one call completes the
+      // accept (redirects), and any call that doesn't redirect must have
+      // bailed out for the *expected* reason (invite already accepted),
+      // not crashed or errored some other way -- checked below regardless
+      // of which interleaving this run happens to produce.
       const formData1 = new FormData();
       formData1.set("token", invite.token);
       const formData2 = new FormData();
       formData2.set("token", invite.token);
 
-      await Promise.all([
-        expectRedirect(acceptInvite({ error: null }, formData1), "/dashboard"),
-        expectRedirect(acceptInvite({ error: null }, formData2), "/dashboard"),
+      const outcomes = await Promise.allSettled([
+        acceptInvite({ error: null }, formData1),
+        acceptInvite({ error: null }, formData2),
       ]);
+
+      let redirectCount = 0;
+      for (const outcome of outcomes) {
+        if (outcome.status === "rejected") {
+          const digest = (outcome.reason as { digest?: string } | null)?.digest;
+          if (typeof digest === "string" && digest.startsWith("NEXT_REDIRECT;") && digest.includes("/dashboard")) {
+            redirectCount++;
+            continue;
+          }
+          // A genuine crash (not a redirect) -- fail the test with the real
+          // error rather than swallowing it into a generic assertion.
+          throw outcome.reason;
+        }
+        // Returned normally without redirecting: only acceptable if it's
+        // the graceful "already accepted" bail-out described above.
+        expect(outcome.value.error).toMatch(/no longer valid/i);
+      }
+      // At least one request must have actually completed the accept --
+      // both bailing out gracefully would mean the invite was never
+      // accepted at all, which is a real failure, not a timing artifact.
+      expect(redirectCount).toBeGreaterThanOrEqual(1);
+
       createdMemberships.push({ organization_id: ACME_ORG_ID, user_id: invitee.id });
 
       const { data: memberships } = await serviceClient
