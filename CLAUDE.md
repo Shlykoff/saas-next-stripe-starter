@@ -14,12 +14,13 @@ Next.js 16 (App Router, Server Actions, Server Components) · Supabase (Auth + P
 
 Разработка ведётся против **локального** Supabase, поднятого через Supabase CLI + Docker (`supabase start`), а не против облачного проекта напрямую.
 
-- Миграции применяются и тестируются локально (`supabase db reset`).
 - `.env.local` — только локальные URL/ключи. Для прода — `source scripts/env.sh production`.
+- Новая миграция — `supabase migration new <name>`; применяются и тестируются локально через `supabase db reset`.
 - Схему меняем только файлами миграций, не через Supabase Studio.
-- На hosted миграции накатываются сами при сборке на Vercel (`scripts/apply-production-migrations.mjs`).
+- На hosted миграции накатываются сами при сборке на Vercel (`scripts/apply-production-migrations.mjs`). Вручную (только с разрешения пользователя, см. правило 8) — `supabase db push --db-url "$POSTGRES_URL_NON_POOLING"` после `source scripts/env.sh production`.
 - `supabase start` требует запущенный Docker.
 - `stripe listen --forward-to localhost:3000/api/webhooks/stripe` держать запущенным весь сеанс разработки.
+- Письма локально не улетают реально — их ловит Mailpit (`http://127.0.0.1:54324`), поднятый вместе с `supabase start`.
 
 ## Не-переговорные правила (для всех агентов)
 
