@@ -4,11 +4,11 @@
 
 [![CI](https://github.com/Shlykoff/saas-next-stripe-starter/actions/workflows/ci.yml/badge.svg)](https://github.com/Shlykoff/saas-next-stripe-starter/actions/workflows/ci.yml)
 
-**Live demo:** https://saas.shlykoff.com — test accounts and cards are listed in the sections below ("Running locally" for seeded accounts, "Test cards" for Stripe).
+**Live demo:** https://saas.shlykoff.com — seeded test accounts below ("Running locally"), test cards under "Stripe".
 
 A subscription SaaS starter: Next.js (App Router) + Supabase (Auth/Postgres/RLS) + Stripe (Checkout, Customer Portal, Webhooks). Full spec — `docs/spec.md`; agent context — `CLAUDE.md`.
 
-> Status: the MVP flow is fully built, deployed to production (Vercel + hosted Supabase + Stripe test mode + Resend), and manually walked through end-to-end in a real browser — signup with mandatory email confirmation (real delivery via Resend), Google OAuth sign-in, onboarding (workspace creation), pricing → Stripe Checkout, a Basic→Pro upgrade directly in the Stripe Customer Portal with an immediate prorated charge, a dashboard showing plan name/status, and the gated product feature `/notes` (real CRUD with organization-scoped RLS) behind subscription status.
+> Deployed to production (Vercel + hosted Supabase + Stripe test mode + Resend) and walked through end-to-end in a real browser: signup with email confirmation, Google OAuth, onboarding, Checkout, a plan upgrade with immediate proration, and the subscription-gated `/notes` feature.
 
 ## Screenshots
 
@@ -26,125 +26,103 @@ Next.js 16 (App Router, Server Actions, Server Components) · Supabase (Auth + P
 
 ## Features
 
-- **Sign up / sign in** (`/signup`, `/login`) — email+password via Server Actions (`app/actions/auth.ts`) plus a "Continue with Google" button (OAuth, PKCE flow through `/auth/callback`). Server-side email/password validation, clear error messages (wrong password, already registered, email not confirmed). **Email confirmation is mandatory** (`auth.email.enable_confirmations = true` in `supabase/config.toml`): after `/signup`, sign-in is blocked until the user clicks the link in the confirmation email. The link points at the app's own `/auth/confirm` route (`app/auth/confirm/route.ts`, custom template `supabase/templates/confirmation.html`) instead of Supabase's built-in `.../auth/v1/verify` — needed for compatibility with the PKCE flow the rest of the app uses (same explicit cookie-write-on-response pattern as `/auth/callback`).
-- **Onboarding** (`/onboarding`) — a form to create an organization (name/slug); a DB trigger makes the creator the owner automatically. Redirects to `/dashboard` if an organization already exists.
-- **Pricing** (`/pricing`) — 2 plans (Basic/Pro) from `lib/plans.ts`, a Subscribe button → `createCheckoutSession` → Stripe Checkout. Shows the current plan instead of the button once a subscription is active; the button is hidden for non-owners (the real enforcement is at the server-action level — see `requireOrgOwner` in `app/actions/billing.ts`).
-- **Dashboard** (`/dashboard`) — current plan name and status (`lib/plans.ts`'s `planForPriceId`, a reverse lookup on `subscriptions.stripe_price_id`), renewal date, and a "Manage billing" button → Stripe Customer Portal. A banner prompts to subscribe / update payment method when there's no subscription or a payment failed.
-- **Notes** (`/notes`, gated) — access only when `subscriptions.status in ('active', 'trialing')`, checked server-side in `app/notes/page.tsx` via `lib/subscription-access.ts` plus an RLS-protected query against `subscriptions` (not just hiding a button — an organization without a subscription never receives the content markup at all). Behind the gate is real CRUD over the `notes` table (`supabase/migrations/20260817212642_add_notes.sql`): notes are shared across the organization, any member can create/edit, but editing/deleting someone else's note is owner-only (enforced by an RLS policy, not application code — see `app/actions/notes.ts`). The list is server-paginated (20/page, `?page=`), searchable (`?q=`, case-insensitive `ilike` over title/body, debounced client-side before it touches the URL), and sortable (`?sort=newest|oldest|title_asc`) — all three live in `lib/notes.ts`'s `getOrganizationNotes` and are driven entirely by the URL, read server-side by `app/notes/page.tsx` (`components/notes/notes-toolbar.tsx`, `components/notes/notes-pagination.tsx`). Changes made by a teammate (or the same user in another tab) show up live via `components/notes/notes-realtime.tsx`, a **private** Supabase Realtime broadcast channel (`notes:org:<organization_id>`) rather than the default `postgres_changes` — `postgres_changes` does not check RLS for `DELETE` events (a documented Postgres/Realtime limitation: there's no row left to evaluate a policy against once it's gone), so a naive client-side `filter: organization_id=eq.<id>` would leak every organization's note deletions to every subscriber. Instead, a DB trigger (`trg_notes_broadcast_changes`) publishes INSERT/UPDATE/DELETE to that private topic, and a real RLS policy on `realtime.messages` (`notes_broadcast_authorized_org_members`, `supabase/migrations/20260818174917_enable_notes_realtime.sql`) authorizes delivery per-subscriber against their own JWT — verified against a real WebSocket connection and two real organizations in `tests/notes-realtime.test.ts`, not just trusted from the migration's comment. Notes also support **file attachments** (images, PDFs, plain text/CSV, Office docs — up to 10 MiB): the metadata lives in `note_attachments` (`supabase/migrations/20260818222947_add_note_attachments.sql`), and the file bytes live in a private Storage bucket, `note-attachments` — both independently RLS-gated to the same organization boundary (a DB trigger keeps `note_attachments.organization_id` honest against the note it points at, since RLS's `WITH CHECK` alone can't verify a cross-table value). Uploads go **directly from the browser to Supabase Storage** via a short-lived signed upload URL (`createAttachmentUploadUrl` → `uploadToSignedUrl` → `confirmNoteAttachment`, `app/actions/note-attachments.ts`, `components/notes/attachment-upload.tsx`) rather than through a Server Action carrying the file bytes — see "Key technical decisions" below for why. Downloads are on-demand signed URLs (`getAttachmentDownloadUrl`), minted only when a Download button is actually clicked rather than pre-signed for every attachment on every page render; deleting an attachment removes the DB row first, then best-effort removes the Storage object, and is allowed for the uploader or the organization owner (`note_attachments_delete_uploader_or_owner`).
-- **Org switcher** — a user can belong to more than one organization (`organization_members` has no per-user uniqueness constraint). Which one is "active" lives in an `active_org_id` cookie rather than the URL (routes stay flat — no `/org/[slug]/...` refactor), resolved by `lib/org.ts`'s `getActiveOrganization` (cookie → RLS-checked membership → falls back to the first organization by `created_at` and repairs the cookie). The switcher in the header (`components/layout/org-switcher.tsx`) only renders as a dropdown when there's more than one organization to choose from; with exactly one, it's just a label. Switching goes through the `switchOrganization` Server Action (`app/actions/org.ts`), which re-verifies membership server-side before ever trusting a client-supplied organization id.
-- **Team members & email invites** (`/dashboard/members`) — the organization owner invites teammates by email + role (owner/member); the invite is emailed via [Resend](https://resend.com) (`lib/resend.ts`, `lib/emails/invite-email.ts`) with a link to `/invite/accept?token=...`. The invitee signs in or signs up (existing `next=` redirect pattern) and accepts; acceptance runs through `service_role` (`app/actions/invites.ts`'s `acceptInvite`) because RLS deliberately gives an ordinary session no path to self-accept (`organization_invites_update_owner_revoke` only permits `pending → revoked`, and `organization_members` INSERT is owner-only) — so `acceptInvite` re-verifies email match, `pending` status, and expiry itself rather than trusting the page's own (UX-only) checks. Members/invites data: creating/revoking an invite goes through the session-bound client (RLS-enforced, owner-only); the member roster's emails come from a read-only `service_role` lookup (`auth.admin.getUserById`) scoped to ids an RLS-scoped query already proved belong to the organization, since `organization_members` has no email column and `auth.users` isn't queryable by the anon-key client. Because an invite can be accepted from an entirely different tab/browser/session than the one an owner is looking at this page in, `/dashboard/members` re-fetches on tab focus (`components/refresh-on-focus.tsx`, a `visibilitychange`/`focus` listener calling `router.refresh()`, throttled to at most once per 3s) rather than staying stale until a manual reload — deliberately not Supabase Realtime here: an owner catching up on invite state when they switch back to this tab doesn't need the same second-by-second live feed `/notes` has (see the Notes bullet above), so the simpler focus-triggered refresh is the right amount of machinery for this page. The owner can also remove a member outright or change their role directly (an inline `<Select>` next to each teammate's row, `changeMemberRole` in `app/actions/org.ts`) — both are one RLS-authorized action away (`organization_members_delete_owner_or_self` / `organization_members_update_owner`), never shown for the owner's own row (removing/demoting the sole owner is still safely rejected server-side by `trg_prevent_last_owner_change` even though the UI never offers it), and both send the affected member a best-effort notification email (`lib/emails/member-removed-email.ts` / `role-changed-email.ts`) — a failed send never rolls back the actual change.
-- **Responsive header** (`components/layout/site-header.tsx`) — the horizontal nav (org switcher + up to 4 links + auth button) only fits from `md` (768px) up; below that it collapses into a hamburger/`Sheet` (`components/layout/mobile-nav.tsx`) with the same links, found overlapping on a real phone screen during live testing once Members/the org switcher joined the header.
-- **Routes are protected** both at the `proxy.ts` level (Next.js 16 renamed `middleware.ts` to `proxy.ts`; redirects to `/login` before render) and again at every server component page (a real check, not just UX convenience).
+- **Sign up / sign in** (`/signup`, `/login`) — email+password plus Google OAuth (PKCE). Email confirmation is mandatory before login, via a custom `/auth/confirm` route (not Supabase's built-in verify URL, for PKCE compatibility).
+- **Onboarding** (`/onboarding`) — create an organization; the creator becomes owner automatically.
+- **Pricing** (`/pricing`) — Basic/Pro plans → Stripe Checkout. Subscribe button hidden for non-owners, enforced server-side (`requireOrgOwner`).
+- **Dashboard** (`/dashboard`) — current plan/status/renewal date, "Manage billing" → Stripe Customer Portal.
+- **Notes** (`/notes`, gated on an active subscription) — organization-shared notes with RLS-enforced CRUD (edit/delete someone else's note is owner-only), server-side pagination/search/sort, and live updates via a **private** Supabase Realtime broadcast channel rather than `postgres_changes` (which doesn't apply RLS to `DELETE` events). Supports **file attachments** (images/PDF/docs, ≤10 MiB) uploaded directly from the browser to a private Storage bucket via a signed URL — see "Key technical decisions" for why.
+- **Org switcher** — a user can belong to multiple organizations; the active one lives in a cookie, re-verified server-side on every switch.
+- **Team members & email invites** (`/dashboard/members`) — owner invites by email+role via Resend; owner can remove members or change roles, both send a notification email.
+- **Responsive header** — collapses into a mobile menu below 768px.
+- **Routes are protected** both in `proxy.ts` and again on every server page — not just a UX convenience.
 
-## Running locally (full flow)
+## Running locally
 
 ```bash
 npm install
-supabase start          # spins up local Supabase in Docker
+supabase start          # local Supabase in Docker
 cp .env.example .env.local
-# fill in .env.local with values from `supabase status` + Stripe test keys (see below)
+# fill in .env.local from `supabase status` + Stripe test keys (see below)
 npm run dev
 ```
 
-**Keep `stripe listen --forward-to localhost:3000/api/webhooks/stripe` running in a separate terminal for the whole local dev session** (not just during one test) — without it, Stripe physically cannot deliver a webhook to `localhost`, and `checkout.session.completed`/`customer.subscription.*` events are simply lost: Checkout succeeds, but `/dashboard` stays on "No active subscription" as if the payment failed. If you forgot and already missed an event, there's no need to redo Checkout — the event already happened in Stripe: `stripe events list --limit 5` finds its `evt_...`, and `stripe events resend <event_id> --confirm` redelivers it once `stripe listen` is running again.
+Keep `stripe listen --forward-to localhost:3000/api/webhooks/stripe` running in a separate terminal for the whole session — without it, webhook events never reach `localhost` and `/dashboard` will look like the payment failed even though it succeeded. Missed an event anyway? `stripe events resend <event_id> --confirm`.
 
-> Known environment quirk: if `npm run dev` loops on `Watchpack Error (watcher): EMFILE: too many open files`, that's a file-descriptor limit of the particular sandbox/machine, not a project bug — `npm run build && npm run start` (no persistent watcher) isn't affected and works fine for an end-to-end check.
+Use the same host everywhere — `127.0.0.1` or `localhost`, never mixed — browsers treat them as different cookie origins, which breaks the post-Checkout session. `.env.example`/`supabase/config.toml` are already aligned on `127.0.0.1`.
 
-**Use the same host everywhere: either `127.0.0.1` or `localhost` — never mix them.** Browsers treat `localhost` and `127.0.0.1` as different hosts for cookie purposes, even though both point at the same server. If you sign in via `http://127.0.0.1:3000` while `NEXT_PUBLIC_APP_URL` in `.env.local` is set to `http://localhost:3000`, Stripe will redirect you back to a host that never received your session cookie post-Checkout, and `/dashboard` will show "not signed in" even though the payment succeeded. Same logic for Google OAuth and the email confirmation link: the `redirectTo`/emailed link the browser actually uses must be in `additional_redirect_urls` in `supabase/config.toml` — if only `site_url` (the bare origin) is listed, without the `/auth/callback` or `/auth/confirm` path, GoTrue silently falls back to `site_url`, and the auth code never gets exchanged for a session. `.env.example` and `supabase/config.toml` in this repo are already aligned on `127.0.0.1` — if you change one, update the other.
+> If `npm run dev` loops on `Watchpack Error: EMFILE: too many open files`, that's a local file-descriptor limit, not a project bug — try `ulimit -n 10240` before `npm run dev`, or use `npm run build && npm run start` instead (no persistent watcher).
 
-Walking the full flow by hand:
+Walking the flow by hand:
 
-1. Open `http://localhost:3000`, click "Get started" → `/signup`, register with email+password. A session is **not** created immediately — the form shows "Account created. Check your email to confirm your address before signing in." Open Mailpit (a local SMTP catcher — no real email is sent) at `http://127.0.0.1:54324`, find the "Confirm your email" message, and follow the link — it lands on `/auth/confirm` and signs you in. Trying to sign in before confirming returns a clear "Email not confirmed" error.
-2. Onboarding: enter a workspace name/slug → redirect to `/dashboard`.
-3. `/dashboard` shows a "No active subscription" banner → go to `/pricing`.
-4. Click "Subscribe" on either plan → Stripe Checkout (test mode) → pay with the test card `4242 4242 4242 4242` (see "Test cards" below).
-5. Redirect back to `/dashboard?checkout=success`. Subscription status updates asynchronously via the webhook — this requires either `stripe listen --forward-to localhost:3000/api/webhooks/stripe` running beforehand (see below), or a manual `stripe trigger checkout.session.completed`.
-6. Once the subscription status is `active`/`trialing`, `/notes` shows the real note list instead of the paywall: you can create a note, edit/delete your own; the organization owner can edit/delete any note in the organization (moderation), a regular member only their own.
+1. `/signup` with email+password → check Mailpit at `http://127.0.0.1:54324` for the confirmation email → follow the link.
+2. Onboarding: name a workspace → `/dashboard`.
+3. `/pricing` → Subscribe → Checkout with `4242 4242 4242 4242`.
+4. Back on `/dashboard`, subscription status updates via the webhook (needs `stripe listen` running, or `stripe trigger checkout.session.completed`).
+5. `/notes` unlocks once the subscription is `active`/`trialing`.
 
-Alternatively, skip Checkout entirely and use the seeded test accounts from `supabase/seed.sql` (loaded automatically by `supabase db reset`) — password for all of them: `password123`. These accounts are inserted directly into `auth.users` with `email_confirmed_at` already set, so email confirmation isn't required and sign-in works immediately:
+Or skip Checkout and use the seeded accounts from `supabase/seed.sql` (password `password123` for all):
 
 | Email | Organization | Role | Subscription |
 |---|---|---|---|
 | `owner_a@example.com` | Acme | owner | `active` — `/notes` unlocked |
-| `member_a@example.com` | Acme | member | `active` — `/notes` unlocked, billing hidden (not owner) |
-| `owner_b@example.com` | Globex | owner | no subscription — `/notes` shows the paywall |
+| `member_a@example.com` | Acme | member | `active` — `/notes` unlocked, billing hidden |
+| `owner_b@example.com` | Globex | owner | none — `/notes` shows the paywall |
 
-Tests: `npm run test` (Vitest). Requires a running local Supabase (`supabase start`) — the integration tests (webhook, `/notes` subscription gating, `notes` CRUD authorization, `notes` pagination/search/sort, and the `notes:org:<id>` Realtime broadcast channel's RLS authorization over a real WebSocket in `tests/notes-realtime.test.ts`) read/write real tables in the local database and use the seed accounts from the table above.
+Tests: `npm run test` (Vitest, needs local Supabase running — integration tests hit real tables).
 
-If you changed the DB schema (a new migration), regenerate the TS types, or `lib/supabase/database.types.ts` silently drifts out of sync with the schema:
-
-```bash
-npm run db:types   # supabase gen types typescript --local > lib/supabase/database.types.ts
-```
+Changed the DB schema? Regenerate types: `npm run db:types`.
 
 ### Checking something against production from the shell
 
-`.env.local` always points at local Docker Supabase — that's what `npm run dev`/`npm run test` read, and it should never be edited to temporarily hold production credentials just to run one `curl`/`supabase` command against the hosted project. Instead, keep a separate `.env.production.local` (gitignored, same variable set, real hosted Supabase URL/keys + `NEXT_PUBLIC_APP_URL=https://saas.shlykoff.com`) and load it into just the current shell on demand:
+`.env.local` always points at local Docker Supabase. For one-off checks against the hosted project, load a separate gitignored `.env.production.local` into just the current shell:
 
 ```bash
-source scripts/env.sh production   # this shell only, until you close it
-# ... curl/supabase commands now see the real hosted project ...
-source scripts/env.sh local        # back to local Docker Supabase
+source scripts/env.sh production   # this shell only
+source scripts/env.sh local        # back to local
 ```
-
-Neither `.env.local` nor `npm run dev` are ever touched by this — it's purely for one-off verification (checking RLS on the hosted project, inspecting a real webhook delivery, etc.), not a second app environment to develop against.
 
 ## Google OAuth
 
-The "Continue with Google" button (`components/auth/google-oauth-button.tsx`) calls `supabase.auth.signInWithOAuth({ provider: "google" })` and has been verified live end-to-end with a real Google account. Without real Google OAuth credentials in the environment where `supabase start` runs, the button still renders, but fails on Google's consent screen (`Error 401: invalid_client`) — expected out-of-the-box behavior on a fresh clone, since credentials aren't committed (`.env.local` is in `.gitignore`).
+Verified live end-to-end. Without real credentials, the button renders but fails at Google's consent screen (`invalid_client`) — expected on a fresh clone.
 
-What's needed to make OAuth actually work (in a new environment / for a new developer):
-
-1. Create an OAuth 2.0 Client in the [Google Cloud Console](https://console.cloud.google.com/apis/credentials) (Application type: **Web application**).
-2. Authorized redirect URI (locally): `http://127.0.0.1:54321/auth/v1/callback` — this is Supabase Auth's own callback, not this app's `/auth/callback` (which is one hop further down the redirect chain).
-3. Export `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` in the shell **before** running `supabase start` (see `supabase/config.toml`'s `[auth.external.google]` and `.env.example` — these variables are substituted in by the `supabase start` process via `env(...)`, not read by Next.js directly):
-   ```bash
-   export GOOGLE_OAUTH_CLIENT_ID=...
-   export GOOGLE_OAUTH_CLIENT_SECRET=...
-   supabase start
-   ```
-4. For a production deploy — the same thing, with the real domain in the redirect URI, and the same variables set in the Vercel/hosted-Supabase environment.
+1. Create an OAuth 2.0 Client in [Google Cloud Console](https://console.cloud.google.com/apis/credentials).
+2. Redirect URI (local): `http://127.0.0.1:54321/auth/v1/callback` (Supabase Auth's own callback).
+3. Before `supabase start`, export `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET` (see `supabase/config.toml`'s `[auth.external.google]`).
+4. For production: same thing, real domain, set in Vercel/hosted Supabase.
 
 ## Stripe
 
 ### Environment variables
 
-All of them are in `.env.example`. Briefly:
+All in `.env.example`:
 
 | Variable | Purpose |
 |---|---|
-| `STRIPE_SECRET_KEY` | Stripe secret key (test mode: `sk_test_...`), used server-side only (`lib/stripe.ts`). |
-| `STRIPE_WEBHOOK_SECRET` | Secret for verifying the webhook signature (`stripe.webhooks.constructEvent`). Locally — from `stripe listen` (see below); in production — from the Stripe Dashboard when registering the endpoint URL. |
-| `STRIPE_PRICE_ID_BASIC`, `STRIPE_PRICE_ID_PRO` | Ids of the plan Prices, created ahead of time in the Stripe Dashboard (test mode). |
-| `STRIPE_PORTAL_CONFIGURATION_ID` | Id of a Billing Portal configuration with `subscription_update` enabled (plan switching right in the Customer Portal). See "Switching plans in the Customer Portal" below — without it, "Manage billing" only lets a customer cancel or update their card, not change plans. |
-| `NEXT_PUBLIC_APP_URL` | The app's base URL — used for Checkout's/Customer Portal's `success_url`/`cancel_url`/`return_url`, and for the link in organization-invite emails (`lib/app-url.ts`). |
-| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Public Supabase values, for the client and for server actions acting on behalf of the current user. |
-| `SUPABASE_SERVICE_ROLE_KEY` | Server-only, via `lib/supabase/service-role.ts` — never in client code. Used by the webhook handler, and by the invite-acceptance flow (`app/actions/invites.ts`'s `acceptInvite`, `app/invite/accept/page.tsx`) and the members roster (`app/dashboard/members/page.tsx`), both of which need to bypass RLS by design (see the Features section above). |
-| `RESEND_API_KEY` | Server-only, via `lib/resend.ts`. Sends organization-invite emails directly (not through Supabase Auth's own email, since an invite isn't an auth event) — the same key already configured as Supabase's Custom SMTP password. From [Resend Dashboard → API Keys](https://resend.com/api-keys). |
+| `STRIPE_SECRET_KEY` | Server-side only (`lib/stripe.ts`). |
+| `STRIPE_WEBHOOK_SECRET` | Verifies webhook signatures. From `stripe listen` locally, from the Dashboard in production. |
+| `STRIPE_PRICE_ID_BASIC`, `STRIPE_PRICE_ID_PRO` | Plan Price ids. |
+| `STRIPE_PORTAL_CONFIGURATION_ID` | Billing Portal config with plan-switching enabled (see below). |
+| `NEXT_PUBLIC_APP_URL` | Base URL for Checkout/Portal redirects and invite emails. |
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Public Supabase values. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-only — webhook handler, invite acceptance, member roster lookups. |
+| `RESEND_API_KEY` | Server-only — organization-invite emails. |
 
-Stripe's test/live modes are strictly separated via these variables: local development and CI use one set of test keys, a Vercel production deploy uses a separate set of live keys — the two are never mixed.
+Test and live Stripe keys are never mixed: local/CI use test keys, production uses live keys.
 
 ### Test cards
 
-For paying in Stripe Checkout (test mode):
+- Success: `4242 4242 4242 4242`.
+- Declined renewal (`invoice.payment_failed`): `4000 0000 0000 0341`.
+- Full list: https://docs.stripe.com/testing
 
-- Successful payment: `4242 4242 4242 4242`, any future date, any CVC, any ZIP.
-- Declined payment (to exercise `invoice.payment_failed`): `4000 0000 0000 0341` (the card passes at Checkout, but the subscription's charge/renewal is declined).
-
-Full list of test cards: https://docs.stripe.com/testing
-
-### Testing the webhook locally via the Stripe CLI
-
-Requires a real Stripe account (test mode) and the [Stripe CLI](https://docs.stripe.com/stripe-cli).
+### Testing the webhook locally
 
 ```bash
 stripe login
 stripe listen --forward-to localhost:3000/api/webhooks/stripe
 ```
 
-This prints a `whsec_...` — that value is `STRIPE_WEBHOOK_SECRET` for `.env.local` while developing locally (the CLI may issue a new secret each time `stripe listen` runs — update `.env.local` accordingly).
-
-Then, in a separate terminal while `npm run dev` and `stripe listen` are both running, you can generate test events:
+Prints a `whsec_...` for `STRIPE_WEBHOOK_SECRET`. Then, with `npm run dev` running too:
 
 ```bash
 stripe trigger checkout.session.completed
@@ -153,23 +131,11 @@ stripe trigger customer.subscription.deleted
 stripe trigger invoice.payment_failed
 ```
 
-Or just run the real Checkout flow while signed in with a workspace, via `/pricing` with the test card above — `stripe listen` will forward the event to the local `/api/webhooks/stripe`.
-
-### Automated webhook test (no real Stripe account needed)
-
-`tests/webhooks-stripe.test.ts` — an integration test against `app/api/webhooks/stripe/route.ts`, using `stripe.webhooks.generateTestHeaderString` (a stripe-node test utility that generates a valid signature without a real account) and the local Supabase instance. It checks:
-
-- processing a validly-signed event and writing to `subscriptions`;
-- idempotency — redelivering the same `event.id` isn't applied twice;
-- rejecting a request with no `stripe-signature` / an invalid signature (400), without processing the body.
-
-Requires only a running local Supabase (`supabase start`) — no real Stripe keys needed, since `constructEvent`/`generateTestHeaderString` are pure local HMAC operations with no network calls.
+`tests/webhooks-stripe.test.ts` covers signature verification and idempotency automatically, without a real Stripe account (`generateTestHeaderString`).
 
 ### Switching plans in the Customer Portal
 
-A fresh Stripe account's default (auto-created) Customer Portal configuration **doesn't allow changing plans** — only cancelling the subscription or updating the payment method. For the "Manage billing" button to allow an upgrade/downgrade between Basic and Pro, you need a separate portal configuration with `features.subscription_update.enabled = true`, both Prices listed as switchable products, and `proration_behavior = "always_invoice"` (important: the default value, `create_prorations`, only *accumulates* the price difference onto the *next* regular invoice instead of charging it immediately — if you want an upgrade to be charged right away, you need `always_invoice` specifically).
-
-You can create such a configuration once via the API (save the `id` it returns — that's `STRIPE_PORTAL_CONFIGURATION_ID`):
+A default Stripe account's Customer Portal can't change plans — only cancel or update payment. Enable it with a portal configuration (`features.subscription_update.enabled = true`, `proration_behavior = "always_invoice"` for an immediate charge on upgrade):
 
 ```bash
 curl https://api.stripe.com/v1/billing_portal/configurations \
@@ -185,26 +151,25 @@ curl https://api.stripe.com/v1/billing_portal/configurations \
   -d "features[payment_method_update][enabled]=true"
 ```
 
-`app/actions/billing.ts`'s `createPortalSession` passes `configuration: STRIPE_PORTAL_CONFIGURATION_ID` to `stripe.billingPortal.sessions.create()` when the variable is set; without it, the account's default configuration is used (no plan switching).
+Save the returned `id` as `STRIPE_PORTAL_CONFIGURATION_ID`.
 
-## Manual steps before the first "live" Stripe run
+## Manual steps before the first live Stripe run
 
-1. Create a Stripe account (if you don't have one yet) and enable test mode.
-2. Create 2 Products/Prices in the Stripe Dashboard (test mode) for the Basic/Pro plans, and put their ids in `STRIPE_PRICE_ID_BASIC` / `STRIPE_PRICE_ID_PRO`.
-3. Copy the `sk_test_...` key into `STRIPE_SECRET_KEY`.
-4. Run `stripe listen --forward-to localhost:3000/api/webhooks/stripe`, and put the issued `whsec_...` into `STRIPE_WEBHOOK_SECRET`.
-5. Create a billing portal configuration (see "Switching plans in the Customer Portal" above), and put its id in `STRIPE_PORTAL_CONFIGURATION_ID`.
-6. Run through Checkout with the test card `4242 4242 4242 4242` and confirm `subscriptions` updated in the local database.
+1. Create a Stripe account, enable test mode.
+2. Create Basic/Pro Products/Prices, set `STRIPE_PRICE_ID_BASIC`/`STRIPE_PRICE_ID_PRO`.
+3. Set `STRIPE_SECRET_KEY`.
+4. Run `stripe listen`, set `STRIPE_WEBHOOK_SECRET`.
+5. Create a billing portal configuration (above), set `STRIPE_PORTAL_CONFIGURATION_ID`.
+6. Run Checkout with the test card and confirm `subscriptions` updated.
 
 ## Key technical decisions
 
-**RLS deny-by-default, rather than "the app filters by organization_id."** Every table with user data (`organizations`, `organization_members`, `subscriptions`, `notes`, `processed_stripe_events`) has `ENABLE` + `FORCE ROW LEVEL SECURITY`, separate `select`/`insert`/`update`/`delete` policies (never one blanket policy), and subscription-status writes are restricted to `service_role` alone. This is a deliberate choice in favor of "isolation is guaranteed at the database level" over "the app promises never to forget `.eq('organization_id', ...)` on every query" — in a multi-tenant system, one forgotten check in one place means a cross-organization data leak. The cost of this choice: some logic (who can edit someone else's note, who's an organization's last owner) lives in SQL triggers rather than TypeScript — e.g. `trg_prevent_last_owner_change` uses `pg_advisory_xact_lock` keyed on `organization_id` to serialize concurrent attempts to remove the last owner (a naive unlocked `count(*)` check doesn't protect against two parallel transactions that both see "there's still another owner" and both proceed — reproduced and closed during review).
+**RLS deny-by-default, not app-level `organization_id` filtering.** Every user-data table has RLS forced with separate select/insert/update/delete policies; one forgotten `.eq()` in application code can't leak data across organizations. Some logic that's normally application code (last-owner protection, cross-tenant integrity) lives in DB triggers instead — e.g. `trg_prevent_last_owner_change` uses an advisory lock to close a real race two concurrent removals could otherwise both win.
 
-**Webhook idempotency is a claim/CAS state machine with a fencing token, not `insert ... on conflict do nothing`.** Naive idempotency ("have we seen this `event.id`? then ignore it") breaks under concurrent redelivery of the same event (which Stripe does when a response is slow): if "the row exists" is treated as synonymous with "already successfully processed," a race between two concurrent deliveries can result in the handler acking Stripe with `200 OK` for an event that was never actually applied. `processed_stripe_events` instead holds an explicit `status` (`processing`/`succeeded`) and a separate `claim_token` column: a concurrent duplicate either can't claim ownership and gets a `409` (forcing a genuine Stripe retry), or sees `status='succeeded'` and only then responds `200 duplicate` — never based on a row's mere existence. A stale (not crashed, just slow) claim can be reclaimed by another request past a timeout; `claim_token` prevents the original "slow" request from silently finalizing on top of a claim that has already been reclaimed once its ownership has expired.
+**Webhook idempotency is a claim/CAS state machine, not `insert ... on conflict do nothing`.** Naive "have we seen this event id" breaks under concurrent Stripe retries. `processed_stripe_events` holds an explicit `status` + `claim_token`: a duplicate either can't claim and gets `409` (forcing a real retry), or sees `status='succeeded'` and returns `200` — never based on row existence alone.
 
-**Auth routes write cookies explicitly onto the response object, not via the ambient `cookies()` API.** `app/auth/callback/route.ts` (OAuth) and `app/auth/confirm/route.ts` (email confirmation) are both Route Handlers returning `NextResponse.redirect(...)`, and both write Supabase's session cookies explicitly onto that exact same response object (`response.cookies.set(...)` inside `setAll`) rather than relying on next/headers' `cookies().set()`. The reason is a bug reproduced in practice: the ambient `cookies()` mutation isn't reliably reflected onto the specific `NextResponse` a Route Handler ends up returning, which meant a session was successfully created server-side (Stripe/Supabase logs confirmed `200`), but the browser never received it, and the next request already saw "no session." The same class of caution applies to `signOut()` in `app/actions/auth.ts`, which uses `scope: "local"` rather than the Supabase SDK's default `scope: "global"`: a global sign-out kills **every** session for the user (every tab/device), which is excessive, unexpected behavior for a "Sign out" button in one tab — discovered by live testing (signing out in one tab dropped a freshly created Google OAuth session in another).
+**Auth routes write cookies explicitly onto the response object**, not via ambient `cookies()` — a bug reproduced in practice where the ambient mutation didn't reliably reach the actual `NextResponse` returned, silently dropping sessions. `signOut()` uses `scope: "local"` for the same reason: the SDK's default (`"global"`) kills every session on every device, not just the current tab.
 
-**Note attachments upload straight from the browser to Storage, not through a Server Action carrying the file bytes.** The naive approach — a `<form>`/Server Action receiving the raw file and forwarding it to Supabase Storage server-side — breaks in production specifically because this app deploys to Vercel: serverless functions there cap request bodies at roughly 4.5MB, well under this bucket's own 10 MiB `file_size_limit` (`supabase/migrations/20260818222947_add_note_attachments.sql`), so an ordinary multi-MB PDF or photo would be rejected by the platform before the app's own size check ever ran. The actual flow (`app/actions/note-attachments.ts`, `components/notes/attachment-upload.tsx`) instead only sends small JSON payloads through Server Actions — `createAttachmentUploadUrl` validates and mints a short-lived Supabase Storage signed upload URL/token, the browser then `uploadToSignedUrl`s the real bytes **directly to Storage**, and `confirmNoteAttachment` records the DB metadata row once the bytes are confirmed to exist — so the file itself never touches a Vercel function at all, only Storage's own 10 MiB limit applies. The tradeoff this accepts: a signed URL can be issued and the browser can genuinely upload to it, but if the confirm step never runs (tab closed mid-upload, network drop), that object is orphaned in Storage with no metadata row pointing at it — a known limitation, explicitly documented rather than silently left for someone to discover later, with no cleanup job yet (see that file's header comment).
+**Note attachments upload directly from the browser to Storage**, not through a Server Action carrying the bytes — Vercel serverless functions cap request bodies at ~4.5MB, well under the bucket's 10 MiB limit, so a real phone photo would be rejected before the app's own check ran. A Server Action mints a short-lived signed upload URL; the browser uploads straight to Storage; a second Server Action records the metadata once the bytes exist.
 
-**Migrations apply to hosted Supabase as part of the Vercel build itself, not as a separate manual step.** Originally, shipping a schema change meant running `supabase db push` by hand from a developer's shell before pushing the application code that depends on it — easy to get the order wrong (or forget entirely), which briefly 500s the live site for every user the moment new code queries a table/column that doesn't exist on hosted Supabase yet. `scripts/apply-production-migrations.js` now runs at the start of `npm run build` on every build, but is a genuine no-op unless `VERCEL_ENV=production` (never set locally or in GitHub Actions CI) — Vercel does not serve a new deployment until its build succeeds, so "migration applied" and "new code goes live" become one atomic unit from the outside. Gated strictly on `VERCEL_ENV`, not merely on whether `POSTGRES_URL_NON_POOLING` is set: that variable is present in Preview/Development Vercel environments too (auto-injected by the Supabase-Vercel integration), and this project has no separate staging database (see "Checking something against production from the shell" above) — Preview builds point at the *same* hosted project Production does, so without this exact gate, opening a PR would apply migrations to production on every push. `supabase db push` is idempotent (tracked in `supabase_migrations.schema_migrations` on the remote database), so running it unconditionally on every production build is cheap. The script exits non-zero on failure, deliberately fail-closed: a broken migration fails the whole Vercel build, leaving the *old* deployment (matching the *old* schema) live rather than shipping new code on top of a schema it doesn't match.
-
+**Migrations apply to hosted Supabase as part of the Vercel build**, not a manual step — a schema change used to require running `supabase db push` by hand before pushing dependent code, easy to get backwards and briefly break the live site. `scripts/apply-production-migrations.mjs` runs at the start of every build, no-ops unless `VERCEL_ENV=production`, and fails the whole build (old deployment stays live) if the migration fails.
