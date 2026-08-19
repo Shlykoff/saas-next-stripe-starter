@@ -60,26 +60,27 @@ function AttachmentRow({ attachment, canDelete }: { attachment: NoteAttachmentRo
 
   function handleDownload() {
     setError(null);
-    // Open a blank tab SYNCHRONOUSLY, inside the click handler, then point
-    // it at the real signed URL once getAttachmentDownloadUrl resolves --
-    // most browsers only allow window.open() without a popup-blocker
-    // warning when it's called directly from a user gesture; doing it after
-    // an awaited async call (the natural way to write this) gets silently
-    // blocked in exactly the browsers that matter. If even the blank open
-    // is blocked, fall back to a same-tab navigation.
-    const pendingTab = window.open("", "_blank", "noopener,noreferrer");
     startDownloadTransition(async () => {
       const result = await getAttachmentDownloadUrl(attachment.id);
       if (result.error || !result.url) {
         setError(result.error ?? "Could not create download link.");
-        pendingTab?.close();
         return;
       }
-      if (pendingTab) {
-        pendingTab.location.href = result.url;
-      } else {
-        window.location.href = result.url;
-      }
+      // getAttachmentDownloadUrl's signed URL already carries
+      // Content-Disposition: attachment (app/actions/note-attachments.ts
+      // passes `{ download: file_name }` to createSignedUrl) -- the browser
+      // treats it as a download rather than a navigation regardless of how
+      // it's reached, so no new tab/window is needed at all (an earlier
+      // version of this handler opened one; that's gone now). A temporary,
+      // never-attached-to-anything-visible <a> click is the standard way to
+      // trigger that download without moving the current page away from
+      // itself: the click resolves to a download (per the response header
+      // above), the browser's native save dialog/prompt appears over the
+      // current page, and this page never navigates or blanks.
+      const link = document.createElement("a");
+      link.href = result.url;
+      link.rel = "noopener";
+      link.click();
     });
   }
 

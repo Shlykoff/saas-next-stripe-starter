@@ -280,6 +280,14 @@ export interface DownloadUrlResult {
  * RLS-scoped lookup of storage_path first (null -> generic not-found, same
  * reasoning as createAttachmentUploadUrl above), then a short-lived signed
  * URL for that exact path.
+ *
+ * Passes `{ download: file_name }` -- without it, createSignedUrl's default
+ * response has no Content-Disposition: attachment header, so the browser
+ * just renders the file inline (an image opens as a page, a PDF opens in
+ * the PDF viewer) instead of actually saving it, which is not what a
+ * "Download" button should do. The original file_name is used rather than
+ * storage_path's uuid-prefixed segment so the saved file keeps the name the
+ * uploader gave it.
  */
 export async function getAttachmentDownloadUrl(attachmentId: string): Promise<DownloadUrlResult> {
   if (!attachmentId) return { error: "Missing attachment id." };
@@ -287,7 +295,7 @@ export async function getAttachmentDownloadUrl(attachmentId: string): Promise<Do
   const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase
     .from("note_attachments")
-    .select("storage_path")
+    .select("storage_path, file_name")
     .eq("id", attachmentId)
     .maybeSingle();
 
@@ -296,7 +304,7 @@ export async function getAttachmentDownloadUrl(attachmentId: string): Promise<Do
 
   const { data: signed, error: signError } = await supabase.storage
     .from(NOTE_ATTACHMENTS_BUCKET)
-    .createSignedUrl(data.storage_path, DOWNLOAD_URL_EXPIRY_SECONDS);
+    .createSignedUrl(data.storage_path, DOWNLOAD_URL_EXPIRY_SECONDS, { download: data.file_name });
 
   if (signError || !signed) {
     return { error: `Could not create download URL: ${signError?.message ?? "unknown error"}` };
