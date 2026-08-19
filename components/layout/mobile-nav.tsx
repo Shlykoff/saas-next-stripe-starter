@@ -40,12 +40,21 @@ export function MobileNav({ isSignedIn }: { isSignedIn: boolean }) {
         </SheetHeader>
 
         <nav className="flex flex-col gap-0.5 px-2" aria-label="Main">
-          <SheetClose render={<Link href="/pricing" className={navLinkClass} />}>Pricing</SheetClose>
+          <SheetClose nativeButton={false} render={<Link href="/pricing" className={navLinkClass} />}>
+            Pricing
+          </SheetClose>
           {isSignedIn && (
             <>
-              <SheetClose render={<Link href="/dashboard" className={navLinkClass} />}>Dashboard</SheetClose>
-              <SheetClose render={<Link href="/notes" className={navLinkClass} />}>Notes</SheetClose>
-              <SheetClose render={<Link href="/dashboard/members" className={navLinkClass} />}>
+              <SheetClose nativeButton={false} render={<Link href="/dashboard" className={navLinkClass} />}>
+                Dashboard
+              </SheetClose>
+              <SheetClose nativeButton={false} render={<Link href="/notes" className={navLinkClass} />}>
+                Notes
+              </SheetClose>
+              <SheetClose
+                nativeButton={false}
+                render={<Link href="/dashboard/members" className={navLinkClass} />}
+              >
                 Members
               </SheetClose>
             </>
@@ -62,11 +71,15 @@ export function MobileNav({ isSignedIn }: { isSignedIn: boolean }) {
           ) : (
             <>
               <SheetClose
+                nativeButton={false}
                 render={<Link href="/login" className={cn(buttonVariants({ variant: "ghost" }), "w-full")} />}
               >
                 Sign in
               </SheetClose>
-              <SheetClose render={<Link href="/signup" className={cn(buttonVariants(), "w-full")} />}>
+              <SheetClose
+                nativeButton={false}
+                render={<Link href="/signup" className={cn(buttonVariants(), "w-full")} />}
+              >
                 Sign up
               </SheetClose>
             </>

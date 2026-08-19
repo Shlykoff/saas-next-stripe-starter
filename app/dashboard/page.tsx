@@ -110,7 +110,7 @@ export default async function DashboardPage({
                 </Button>
               </form>
             ) : (
-              <Button render={<Link href="/pricing" />}>Choose a plan</Button>
+              <Button nativeButton={false} render={<Link href="/pricing" />}>Choose a plan</Button>
             )
           ) : (
             <p className="text-sm text-muted-foreground">

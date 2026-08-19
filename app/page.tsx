@@ -14,7 +14,7 @@ export default function Home() {
           wired together so you can focus on what makes your product different.
         </p>
         <div className="flex flex-col gap-3 sm:flex-row">
-          <Button size="lg" render={<Link href="/signup" />}>
+          <Button size="lg" nativeButton={false} render={<Link href="/signup" />}>
             Get started
           </Button>
           <Link

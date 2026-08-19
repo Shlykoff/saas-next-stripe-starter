@@ -10,7 +10,12 @@ import type { ActiveOrganization } from "@/lib/org";
 // pattern), NOT the `asChild` prop from Radix UI proper -- passing
 // `render={<Link .../>}` makes the Button itself render as that <Link>
 // element (with Button's classes/behavior merged on), instead of nesting a
-// second interactive element inside a <button>.
+// second interactive element inside a <button>. Every such usage also
+// passes `nativeButton={false}` -- Base UI's Button defaults that prop to
+// true (assuming its `render` target will always be a real <button>) and
+// logs a dev-mode console error otherwise, since it can no longer assume
+// native button semantics (type="button" defaulting, Enter/Space
+// activation, form association) apply to whatever `render` produced.
 export function SiteHeader({
   isSignedIn,
   organizations,
@@ -45,19 +50,19 @@ export function SiteHeader({
           hamburger/Sheet shown instead at narrower widths.
         */}
         <nav className="hidden items-center gap-1 md:flex md:gap-2" aria-label="Main">
-          <Button variant="ghost" size="sm" render={<Link href="/pricing" />}>
+          <Button variant="ghost" size="sm" nativeButton={false} render={<Link href="/pricing" />}>
             Pricing
           </Button>
 
           {isSignedIn ? (
             <>
-              <Button variant="ghost" size="sm" render={<Link href="/dashboard" />}>
+              <Button variant="ghost" size="sm" nativeButton={false} render={<Link href="/dashboard" />}>
                 Dashboard
               </Button>
-              <Button variant="ghost" size="sm" render={<Link href="/notes" />}>
+              <Button variant="ghost" size="sm" nativeButton={false} render={<Link href="/notes" />}>
                 Notes
               </Button>
-              <Button variant="ghost" size="sm" render={<Link href="/dashboard/members" />}>
+              <Button variant="ghost" size="sm" nativeButton={false} render={<Link href="/dashboard/members" />}>
                 Members
               </Button>
               <form action={signOut}>
@@ -68,10 +73,10 @@ export function SiteHeader({
             </>
           ) : (
             <>
-              <Button variant="ghost" size="sm" render={<Link href="/login" />}>
+              <Button variant="ghost" size="sm" nativeButton={false} render={<Link href="/login" />}>
                 Sign in
               </Button>
-              <Button size="sm" render={<Link href="/signup" />}>
+              <Button size="sm" nativeButton={false} render={<Link href="/signup" />}>
                 Sign up
               </Button>
             </>
