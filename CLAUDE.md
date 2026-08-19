@@ -2,51 +2,47 @@
 
 Этот файл читают ВСЕ агенты (главная сессия и все саб-агенты). Здесь — то, что должно быть известно каждому, независимо от того, какую часть проекта он делает.
 
-## Что строим
+## Что это
 
-Полноценный SaaS-стартер с подпиской. Полное ТЗ — в файле `docs/spec.md` Кратко:
-
-- Регистрация/логин (Supabase Auth, email+пароль + один OAuth-провайдер).
-- Онбординг: создание organization/workspace.
-- Тарифы → Stripe Checkout.
-- Личный кабинет: статус подписки, Stripe Customer Portal.
-- Webhook-обработчик Stripe (`checkout.session.completed`, `customer.subscription.updated/deleted`, `invoice.payment_failed`).
-- RLS: пользователь видит только данные своей организации.
-- Одна продуктовая фича (заметки/задачи), доступная только с активной подпиской.
+SaaS-стартер с подпиской. Исходное ТЗ — `docs/spec.md`; MVP из него построен и задеплоен на прод, плюс с тех пор выросло больше (org switcher, инвайты, участники, вложения). Актуальный список фич — в README, не здесь.
 
 ## Стек
 
-Next.js 14+ (App Router, Server Actions) · Supabase (Auth + Postgres + RLS) · Stripe (Checkout, Customer Portal, Webhooks) · Tailwind + shadcn/ui · TypeScript strict · деплой на Vercel.
+Next.js 16 (App Router, Server Actions, Server Components) · Supabase (Auth + Postgres + RLS + Storage) · Stripe (Checkout, Customer Portal, Webhooks) · Resend (транзакционные письма) · Tailwind v4 + shadcn/ui (base-ui) · TypeScript strict · деплой на Vercel.
 
 ## Локальная среда: Supabase в Docker
 
-Разработка ведётся против **локального** Supabase, поднятого через Supabase CLI + Docker (`supabase start`), а не против облачного проекта напрямую. Это значит:
+Разработка ведётся против **локального** Supabase, поднятого через Supabase CLI + Docker (`supabase start`), а не против облачного проекта напрямую.
 
-- Все миграции сначала применяются и тестируются локально (`supabase db reset` пересоздаёт локальную БД из файлов в `supabase/migrations/`).
-- `.env.local` во время разработки указывает на локальные URL/ключи (`http://127.0.0.1:54321` и локальные anon/service_role ключи, которые выводит `supabase start`), не на облачный проект.
-- Отдельный **hosted**-проект Supabase (бесплатный тариф) существует только для продакшн-деплоя на Vercel — на него накатываются те же файлы миграций через `supabase link` + `supabase db push`, когда фича готова и прошла ревью qa-reviewer. Руками через веб-интерфейс Supabase Studio (ни локальный, ни облачный) схему не трогаем — только через файлы миграций, чтобы одно и то же гарантированно применялось в обеих средах.
-- Docker должен быть запущен на машине пользователя перед тем как агенты начнут работу с БД — если `supabase start` падает с ошибкой подключения к Docker, это не баг в коде, а незапущенный Docker Desktop, сначала проверить это.
-- Для локальной проверки Stripe-флоу `stripe listen --forward-to localhost:3000/api/webhooks/stripe` должен быть запущен параллельно с `npm run dev` весь сеанс разработки, не только на момент одного теста — без него Stripe не может доставить вебхук на `localhost`, и "оплата прошла, а статус подписки не обновился" будет выглядеть как баг в коде, хотя на самом деле вебхук просто некуда доставить. Пропущенные события не нужно генерировать заново — `stripe events list` + `stripe events resend <id> --confirm` доставляют то, что уже произошло в Stripe.
+- Миграции применяются и тестируются локально (`supabase db reset`).
+- `.env.local` — только локальные URL/ключи. Для прода — `source scripts/env.sh production`.
+- Схему меняем только файлами миграций, не через Supabase Studio.
+- На hosted миграции накатываются сами при сборке на Vercel (`scripts/apply-production-migrations.mjs`).
+- `supabase start` требует запущенный Docker.
+- `stripe listen --forward-to localhost:3000/api/webhooks/stripe` держать запущенным весь сеанс разработки.
 
 ## Не-переговорные правила (для всех агентов)
 
 1. Секреты только в `.env.local`, в репозитории — только `.env.example` с плейсхолдерами. Никогда не коммитить реальные ключи.
-2. `SUPABASE_SERVICE_ROLE_KEY` используется **только** в server-side коде (route handlers / server actions). Никогда не передаётся в клиентский бандл.
+2. `SUPABASE_SERVICE_ROLE_KEY` используется **только** в server-side коде. Никогда не передаётся в клиентский бандл.
 3. RLS-политики — deny by default, явные policy на каждую таблицу.
 4. Любой Stripe webhook обязан проверять `stripe-signature` через `stripe.webhooks.constructEvent` на raw body, и обрабатывать повторную доставку идемпотентно.
-5. TypeScript strict, без `any` без явной причины (если пришлось — комментарий почему).
-6. К каждой фиче — хотя бы один тест на критичную логику (RLS-политику или webhook-обработчик).
-7. README поддерживается в актуальном состоянии по ходу разработки, не пишется в конце одним махом.
+5. TypeScript strict, без `any` без явной причины.
+6. К каждой фиче — хотя бы один тест на критичную логику (RLS-политику, webhook, серверный экшен).
+7. README актуален и короткий — пара предложений на решение, не абзац.
+8. Прод не трогается напрямую без явного разрешения пользователя.
+9. Коммит — как только фича и фиксы по ней готовы.
+10. Все замечания qa-reviewer фиксятся до готовности фичи.
 
 ## Как организована работа агентов
 
 В `.claude/agents/` лежат 4 специализированных саб-агента:
 
-- **db-architect** — схема Postgres, RLS-политики, миграции, seed-данные.
-- **stripe-specialist** — Checkout, Customer Portal, webhook-обработчик, биллинг-логика.
-- **nextjs-frontend** — страницы App Router, UI-компоненты, серверные экшены для UI.
-- **qa-reviewer** — ревью безопасности, тесты, готовность README/демо перед тем как считать фичу законченной.
+- **db-architect** — схема, RLS, миграции, pgTAP.
+- **stripe-specialist** — Checkout/Portal/webhook. Только для биллинг-фич.
+- **nextjs-frontend** — страницы, компоненты, серверные экшены.
+- **qa-reviewer** — ревью безопасности/тестов перед готовностью фичи.
 
-Главная сессия (ты, если читаешь этот файл как оркестратор) делегирует задачи нужному саб-агенту через Task tool по его `description`, а не пишет весь код сама везде подряд. После того как db-architect и stripe-specialist / nextjs-frontend закончили этап — обязательно вызови qa-reviewer перед тем как переходить к следующему этапу.
+Порядок для новой фичи: db-architect (если нужна схема) → nextjs-frontend → qa-reviewer.
 
-Рекомендуемый порядок этапов: db-architect (схема + RLS) → stripe-specialist (Checkout + webhook) → nextjs-frontend (онбординг, тарифы, кабинет) → qa-reviewer на каждом этапе перед переходом к следующему.
+Если Agent tool не подхватывает `.claude/agents/` сам — вставляйте персону текстом в промпт.
