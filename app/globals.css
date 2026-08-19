@@ -7,7 +7,7 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
+  --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
   --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
@@ -126,5 +126,17 @@
   }
   html {
     @apply font-sans;
+  }
+  /* Tailwind v4's preflight dropped v3's `button { cursor: pointer }` rule
+     to match the browser's own native default (a plain <button> shows the
+     regular arrow cursor, only <a href> gets a pointer) -- re-added here
+     since every button-like control in this app (components/ui/button.tsx
+     and everything built on it: SheetTrigger, Select's trigger, etc.) is a
+     real interactive control users expect a pointer cursor over, matching
+     how links already behave. :disabled is excluded on purpose -- those
+     already get pointer-events: none from buttonVariants, so no cursor
+     would show a click affordance there anyway. */
+  button:not(:disabled) {
+    cursor: pointer;
   }
 }
